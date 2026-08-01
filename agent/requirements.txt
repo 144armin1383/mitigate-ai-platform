@@ -1,0 +1,7 @@
+GitPython
+requests
+python-dotenv
+watchdog
+rich
+pydantic
+psutil

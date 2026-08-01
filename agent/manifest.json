@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "agent_version": "1.0.0",
+  "required_directories": [
+    "api",
+    "cli",
+    "config",
+    "connectors/aws",
+    "connectors/browser",
+    "connectors/github",
+    "connectors/wordpress",
+    "core",
+    "memory",
+    "models",
+    "plugins",
+    "policies",
+    "prompts",
+    "runtime",
+    "services",
+    "tasks",
+    "tests",
+    "updates"
+  ],
+  "python_packages": [
+    "api",
+    "cli",
+    "core",
+    "models",
+    "plugins",
+    "services"
+  ],
+  "required_files": [
+    "VERSION",
+    "README.md",
+    "CHANGELOG.md",
+    "requirements.txt",
+    "agent.json",
+    "config/config.json",
+    "memory/memory.json",
+    "runtime/runtime.json",
+    "tasks/queue.json",
+    "updates/update.json",
+    "core/logger.py",
+    "core/config.py",
+    "core/storage.py"
+  ],
+  "managed_runtime_files": [
+    "memory/memory.json",
+    "runtime/runtime.json",
+    "tasks/queue.json",
+    "updates/update.json"
+  ],
+  "update": {
+    "repository": "144armin1383/mitigate-ai-platform",
+    "branch": "main",
+    "channel": "stable",
+    "require_clean_worktree": true,
+    "run_tests_before_activation": true,
+    "rollback_on_failure": true,
+    "automatic_code_update": false,
+    "owner_approval_required_for_major_changes": true
+  }
+}
