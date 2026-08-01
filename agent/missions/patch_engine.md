@@ -33,3 +33,11 @@ Deliverables
 
 agent/git/patch_engine.py
 agent/tests/test_patch_engine.py
+
+Additional Acceptance Criteria
+
+- Correctly support new-file patches using unified diff hunks such as @@ -0,0 +1,N @@.
+- Validate and reject absolute paths before attempting to apply patch hunks.
+- Path-security validation must take precedence over file-content validation.
+- Unit tests must use syntactically valid unified diff examples.
+- All existing and newly generated unittest tests must pass.
