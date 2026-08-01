@@ -174,6 +174,18 @@ def build_generation_plan(
     )
     plan.metadata["allowed_deliverables"] = sorted(deliverables)
 
+    plan.metadata["testing_policy"] = {
+        "framework": "unittest",
+        "rules": [
+            "Use Python standard library unittest only.",
+            "Never import or use pytest.",
+            "Never add new testing dependencies.",
+            "Never modify requirements.txt.",
+            "Never suggest pip install commands.",
+            "All tests must be compatible with unittest discovery.",
+        ],
+    }
+
     return plan
 
 
