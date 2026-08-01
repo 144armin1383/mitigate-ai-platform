@@ -1,0 +1,12 @@
+{
+    "name": "MITIGATE AI",
+    "version": "1.0.0",
+    "build": 1,
+    "channel": "stable",
+    "status": "production",
+    "repository": "144armin1383/mitigate-ai-platform",
+    "branch": "main",
+    "php": ">=8.3",
+    "wordpress": ">=7.0",
+    "updated": "2026-08-01T00:00:00Z"
+}

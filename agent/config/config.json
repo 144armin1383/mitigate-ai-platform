@@ -1,0 +1,22 @@
+{
+    "environment": "production",
+
+    "wordpress": {
+        "root": "/srv/mitigate/wordpress/current",
+        "url": "http://18.175.175.110"
+    },
+
+    "github": {
+        "repository": "144armin1383/mitigate-ai-platform",
+        "branch": "main"
+    },
+
+    "logging": {
+        "path": "/srv/mitigate/ai-logs",
+        "level": "info"
+    },
+
+    "memory": {
+        "path": "/srv/mitigate/ai-memory"
+    }
+}
