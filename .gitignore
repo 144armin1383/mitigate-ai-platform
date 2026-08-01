@@ -35,3 +35,13 @@ vendor/
 
 # Temporary
 tmp/
+
+# Python virtual environment
+agent/.venv/
+__pycache__/
+*.py[cod]
+
+# Runtime files
+*.lock
+*.tmp
+*.bak
