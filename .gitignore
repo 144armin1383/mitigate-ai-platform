@@ -45,3 +45,9 @@ __pycache__/
 *.lock
 *.tmp
 *.bak
+
+# Agent runtime state
+agent/tasks/queue.json
+agent/runtime/runtime.json
+agent/memory/memory.json
+agent/updates/update.json

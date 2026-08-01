@@ -7,7 +7,7 @@ from typing import Any
 
 from filelock import FileLock
 
-from logger import build_logger
+from core.logger import build_logger
 
 log = build_logger()
 
