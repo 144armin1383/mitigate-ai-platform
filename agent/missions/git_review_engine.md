@@ -51,3 +51,10 @@ Additional Acceptance Criteria
 - A changed, added, deleted, or renamed secret-like file must produce risk level critical.
 - Secret-like file detection must not read or expose file contents.
 - All existing and newly generated unittest tests must pass.
+
+Security Test Constraints
+
+- Do not include the literal text exec( or eval( anywhere in generated source code, tests, comments, fixtures, or string literals.
+- Test dangerous command detection using harmless symbolic names rather than executable code fragments.
+- Do not call or reference Python exec, eval, os.system, subprocess.Popen, or shell=True.
+- All generated files must pass the Mission Runner forbidden-content policy.
