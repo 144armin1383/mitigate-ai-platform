@@ -213,3 +213,20 @@ Deliverables
 
 - agent/execution/execution_report_writer.py
 - agent/tests/test_execution_report_writer.py
+
+Mandatory JSON-Only Test Contract
+
+- Test code must use the json module exclusively when reading or checking persisted structured data.
+- Do not import the ast module.
+- Do not use ast.literal_eval.
+- Do not use any Python expression interpreter.
+- Do not use dynamic code execution.
+- Do not inspect serialized files as Python literals.
+- Read persisted files with json.load(file_handle).
+- Parse JSON text with json.loads(text).
+- Compare dictionaries, lists, strings, numbers, booleans, and null values directly with unittest assertions.
+- Deterministic serialization tests must compare exact JSON text produced by json.dumps with sort_keys=True and fixed separators, or compare data parsed with json.loads.
+- Production and test files must not contain the characters e, v, a, l immediately followed by an opening parenthesis anywhere, including in comments, strings, names, or documentation.
+- Do not use exec, compile, importlib, __import__, subprocess, os.system, shell execution, or dynamic imports.
+- All generated files must pass Mission Runner forbidden-content validation.
+- All existing and newly generated unittest tests must pass.
