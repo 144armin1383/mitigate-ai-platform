@@ -6,20 +6,21 @@ import json
 import os
 import signal
 import socket
-import sys
 import threading
 import time
-import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Union
+from typing import Any, Callable, Deque, Dict, List, Mapping, MutableMapping, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 
-JSONType = Union[None, bool, int, float, str, List["JSONType"], Dict[str, "JSONType"]]
+# Types
+AuthTokenResolver = Callable[[str], Optional[str]]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class RuntimeAPIConfig:
     host: str = "127.0.0.1"
     port: int = 8765
@@ -28,11 +29,11 @@ class RuntimeAPIConfig:
     request_timeout_seconds: int = 30
     graceful_shutdown_timeout_seconds: int = 15
     enable_lifecycle_endpoints: bool = False
-    # Reference to external secret (e.g., environment variable name). Lazy-resolved.
     auth_token_reference: str = ""
+    auth_token_resolver: Optional[AuthTokenResolver] = None
 
     @staticmethod
-    def from_mapping(mapping: Mapping[str, Any]) -> "RuntimeAPIConfig":
+    def from_dict(cfg: Mapping[str, Any]) -> "RuntimeAPIConfig":
         allowed = {
             "host",
             "port",
@@ -42,234 +43,484 @@ class RuntimeAPIConfig:
             "graceful_shutdown_timeout_seconds",
             "enable_lifecycle_endpoints",
             "auth_token_reference",
+            "auth_token_resolver",
         }
-        unknown = [k for k in mapping.keys() if k not in allowed]
+        unknown = set(cfg.keys()) - allowed
         if unknown:
-            raise ValueError(f"Unknown configuration fields: {', '.join(sorted(unknown))}")
-
-        host = str(mapping.get("host", RuntimeAPIConfig.host))
-        port_raw = mapping.get("port", RuntimeAPIConfig.port)
-        try:
-            port = int(port_raw)
-        except (TypeError, ValueError):
-            raise ValueError("port must be an integer")
-
-        req_limit_raw = mapping.get("request_body_limit_bytes", RuntimeAPIConfig.request_body_limit_bytes)
-        try:
-            request_body_limit_bytes = int(req_limit_raw)
-        except (TypeError, ValueError):
-            raise ValueError("request_body_limit_bytes must be an integer")
-
-        resp_limit_raw = mapping.get("response_body_limit_bytes", RuntimeAPIConfig.response_body_limit_bytes)
-        try:
-            response_body_limit_bytes = int(resp_limit_raw)
-        except (TypeError, ValueError):
-            raise ValueError("response_body_limit_bytes must be an integer")
-
-        req_timeout_raw = mapping.get("request_timeout_seconds", RuntimeAPIConfig.request_timeout_seconds)
-        try:
-            request_timeout_seconds = int(req_timeout_raw)
-        except (TypeError, ValueError):
-            raise ValueError("request_timeout_seconds must be an integer")
-
-        shutdown_timeout_raw = mapping.get(
-            "graceful_shutdown_timeout_seconds", RuntimeAPIConfig.graceful_shutdown_timeout_seconds
+            raise ValueError(f"Unknown configuration fields: {sorted(unknown)}")
+        # Build instance with defaults overridden by provided values
+        return RuntimeAPIConfig(
+            host=str(cfg.get("host", RuntimeAPIConfig.host)),
+            port=int(cfg.get("port", RuntimeAPIConfig.port)),
+            request_body_limit_bytes=int(cfg.get("request_body_limit_bytes", RuntimeAPIConfig.request_body_limit_bytes)),
+            response_body_limit_bytes=int(cfg.get("response_body_limit_bytes", RuntimeAPIConfig.response_body_limit_bytes)),
+            request_timeout_seconds=int(cfg.get("request_timeout_seconds", RuntimeAPIConfig.request_timeout_seconds)),
+            graceful_shutdown_timeout_seconds=int(cfg.get("graceful_shutdown_timeout_seconds", RuntimeAPIConfig.graceful_shutdown_timeout_seconds)),
+            enable_lifecycle_endpoints=bool(cfg.get("enable_lifecycle_endpoints", RuntimeAPIConfig.enable_lifecycle_endpoints)),
+            auth_token_reference=str(cfg.get("auth_token_reference", RuntimeAPIConfig.auth_token_reference)),
+            auth_token_resolver=cfg.get("auth_token_resolver", RuntimeAPIConfig.auth_token_resolver),
         )
+
+
+class _RuntimePrivateHTTPServer(ThreadingHTTPServer):
+    # Ensure handler threads do not prevent process exit
+    daemon_threads = True
+
+    def __init__(self, server_address: Tuple[str, int], RequestHandlerClass: type[BaseHTTPRequestHandler], api: "RuntimePrivateAPI") -> None:
+        self.api = api
+        super().__init__(server_address, RequestHandlerClass, bind_and_activate=True)
+        # Socket timeout for I/O operations
         try:
-            graceful_shutdown_timeout_seconds = int(shutdown_timeout_raw)
-        except (TypeError, ValueError):
-            raise ValueError("graceful_shutdown_timeout_seconds must be an integer")
-
-        enable_lifecycle_endpoints = bool(mapping.get("enable_lifecycle_endpoints", False))
-        auth_token_reference = str(mapping.get("auth_token_reference", ""))
-
-        cfg = RuntimeAPIConfig(
-            host=host,
-            port=port,
-            request_body_limit_bytes=request_body_limit_bytes,
-            response_body_limit_bytes=response_body_limit_bytes,
-            request_timeout_seconds=request_timeout_seconds,
-            graceful_shutdown_timeout_seconds=graceful_shutdown_timeout_seconds,
-            enable_lifecycle_endpoints=enable_lifecycle_endpoints,
-            auth_token_reference=auth_token_reference,
-        )
-        # Validation (must not reject empty auth reference; enforced lazily)
-        _validate_runtime_api_config(cfg)
-        return cfg
+            self.socket.settimeout(float(api.config.request_timeout_seconds))
+        except Exception:
+            pass
 
 
-def _validate_runtime_api_config(cfg: RuntimeAPIConfig) -> None:
-    if not isinstance(cfg.host, str) or not cfg.host:
-        raise ValueError("host must be a non-empty string")
-    # Reject wildcard public binds
-    if cfg.host in ("0.0.0.0", "::"):
-        raise ValueError("wildcard public hosts are not allowed; bind to a specific local address")
+class _RequestHandler(BaseHTTPRequestHandler):
+    # Disable default logging to stderr
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A003 - override
+        return
 
-    if not isinstance(cfg.port, int) or not (0 <= cfg.port <= 65535):
-        raise ValueError("port must be an integer between 0 and 65535")
+    # Core routing
+    def do_GET(self) -> None:  # noqa: N802 - http method naming
+        self.server: _RuntimePrivateHTTPServer  # type: ignore[no-redef]
+        api = self.server.api
+        parsed = urlparse(self.path)
+        path = parsed.path or "/"
+        method = "GET"
+        api._emit_event("request_received", endpoint=path, method=method)
+        try:
+            # Unauthenticated endpoint
+            if path == "/health/live":
+                self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="alive", data={"alive": True}))
+                api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                return
 
-    if not isinstance(cfg.request_body_limit_bytes, int) or cfg.request_body_limit_bytes <= 0:
-        raise ValueError("request_body_limit_bytes must be a positive integer")
+            # All other GET endpoints require authentication
+            auth_ok, http_status, failure_code = api._check_auth(self.headers)
+            if not auth_ok:
+                api._emit_event("authentication_failed", endpoint=path, method=method, http_status=http_status, failure_code=failure_code)
+                self._auth_error(http_status, failure_code)
+                return
 
-    if not isinstance(cfg.response_body_limit_bytes, int) or cfg.response_body_limit_bytes <= 0:
-        raise ValueError("response_body_limit_bytes must be a positive integer")
+            if path == "/health/ready":
+                status_obj = api._safe_runtime_status()
+                ready = bool(status_obj.get("application_ready")) and str(status_obj.get("state")) == "running"
+                if ready:
+                    self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="ready", data={"ready": True}))
+                    api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                else:
+                    self._respond_json(HTTPStatus.SERVICE_UNAVAILABLE, api._response_envelope(ok=False, status="not_ready", error={"code": "runtime_not_ready", "message": "Runtime is not ready"}))
+                    api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
 
-    if not isinstance(cfg.request_timeout_seconds, int) or cfg.request_timeout_seconds <= 0:
-        raise ValueError("request_timeout_seconds must be a positive integer")
+            if path == "/v1/runtime/status":
+                status_obj = api._safe_runtime_status()
+                self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="success", data=status_obj))
+                api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                return
 
-    if (
-        not isinstance(cfg.graceful_shutdown_timeout_seconds, int)
-        or cfg.graceful_shutdown_timeout_seconds <= 0
-    ):
-        raise ValueError("graceful_shutdown_timeout_seconds must be a positive integer")
-    # auth_token_reference is allowed to be empty here (lazy auth enforcement)
+            # Unknown route
+            api._emit_event("request_rejected", endpoint=path, method=method, http_status=HTTPStatus.NOT_FOUND, failure_code="not_found")
+            self._respond_json(HTTPStatus.NOT_FOUND, api._response_envelope(ok=False, status="error", error={"code": "not_found", "message": "Unknown route"}))
+        except Exception:
+            # Never expose raw exception
+            api._emit_event("api_operation_failed", endpoint=path, method=method, http_status=HTTPStatus.INTERNAL_SERVER_ERROR, failure_code="internal_error")
+            self._respond_json(HTTPStatus.INTERNAL_SERVER_ERROR, api._response_envelope(ok=False, status="error", error={"code": "internal_error", "message": "An internal error occurred"}))
+
+    def do_POST(self) -> None:  # noqa: N802 - http method naming
+        self.server: _RuntimePrivateHTTPServer  # type: ignore[no-redef]
+        api = self.server.api
+        parsed = urlparse(self.path)
+        path = parsed.path or "/"
+        method = "POST"
+        api._emit_event("request_received", endpoint=path, method=method)
+        try:
+            # Authentication required for all POST endpoints
+            auth_ok, http_status, failure_code = api._check_auth(self.headers)
+            if not auth_ok:
+                api._emit_event("authentication_failed", endpoint=path, method=method, http_status=http_status, failure_code=failure_code)
+                self._auth_error(http_status, failure_code)
+                return
+
+            # Validate Content-Type
+            content_type = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if content_type != "application/json":
+                api._emit_event("request_rejected", endpoint=path, method=method, http_status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE, failure_code="unsupported_media_type")
+                self._respond_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, api._response_envelope(ok=False, status="error", error={"code": "unsupported_media_type", "message": "Content-Type must be application/json"}))
+                return
+
+            # Read and parse JSON body safely
+            try:
+                body_obj, body_len = self._read_json_object(api)
+            except _ImmediateError as e:
+                api._emit_event("request_rejected", endpoint=path, method=method, http_status=e.http_status, failure_code=e.code)
+                self._respond_json(e.http_status, api._response_envelope(ok=False, status="error", error={"code": e.code, "message": e.message}))
+                return
+
+            # Routing
+            if path == "/v1/requests":
+                # Submit new request to runtime
+                try:
+                    runtime = api.runtime
+                    if runtime is None:
+                        raise RuntimeError("runtime_unavailable")
+                    result = runtime.submit_request(body_obj)  # type: ignore[attr-defined]
+                    # Accepted
+                    safe_request_id = None
+                    if isinstance(body_obj, dict) and isinstance(body_obj.get("request_id"), str):
+                        safe_request_id = body_obj.get("request_id")
+                    data: Dict[str, Any] = {"accepted": True}
+                    # If runtime returns a dict with request_id, include it
+                    if isinstance(result, dict):
+                        rid = result.get("request_id")
+                        if isinstance(rid, str):
+                            data["request_id"] = rid
+                    if safe_request_id and "request_id" not in data:
+                        data["request_id"] = safe_request_id
+                    self._respond_json(HTTPStatus.ACCEPTED, api._response_envelope(ok=True, status="accepted", request_id=data.get("request_id"), data=data))
+                    api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.ACCEPTED, request_id=data.get("request_id"))
+                    return
+                except Exception as exc:  # Map known failures
+                    code, status = api._map_failure(exc)
+                    self._respond_json(status, api._response_envelope(ok=False, status="error", request_id=body_obj.get("request_id") if isinstance(body_obj, dict) else None, error={"code": code, "message": _safe_message_for_code(code)}))
+                    api._emit_event("request_completed", endpoint=path, method=method, http_status=status, failure_code=code, request_id=(body_obj.get("request_id") if isinstance(body_obj, dict) else None))
+                    return
+
+            if path == "/v1/execution-outcomes":
+                try:
+                    runtime = api.runtime
+                    if runtime is None:
+                        raise RuntimeError("runtime_unavailable")
+                    runtime.process_execution_outcome(body_obj)  # type: ignore[attr-defined]
+                    rid = body_obj.get("request_id") if isinstance(body_obj, dict) else None
+                    self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="success", request_id=rid, data={"processed": True}))
+                    api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK, request_id=rid)
+                    return
+                except Exception as exc:
+                    code, status = api._map_failure(exc)
+                    self._respond_json(status, api._response_envelope(ok=False, status="error", request_id=(body_obj.get("request_id") if isinstance(body_obj, dict) else None), error={"code": code, "message": _safe_message_for_code(code)}))
+                    api._emit_event("request_completed", endpoint=path, method=method, http_status=status, failure_code=code, request_id=(body_obj.get("request_id") if isinstance(body_obj, dict) else None))
+                    return
+
+            # Lifecycle endpoints - gated
+            if api.config.enable_lifecycle_endpoints:
+                try:
+                    runtime = api.runtime
+                    if runtime is None:
+                        raise RuntimeError("runtime_unavailable")
+                    if path == "/v1/runtime/start":
+                        runtime.start()  # type: ignore[attr-defined]
+                        self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="success", data={"started": True}))
+                        api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                        return
+                    if path == "/v1/runtime/stop":
+                        runtime.stop()  # type: ignore[attr-defined]
+                        self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="success", data={"stopped": True}))
+                        api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                        return
+                    if path == "/v1/components/background-worker/start":
+                        if hasattr(runtime, "start_background_worker"):
+                            getattr(runtime, "start_background_worker")()  # type: ignore[misc]
+                            self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="success", data={"background_worker_started": True}))
+                            api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                            return
+                        raise AttributeError("start_background_worker")
+                    if path == "/v1/components/background-worker/stop":
+                        if hasattr(runtime, "stop_background_worker"):
+                            getattr(runtime, "stop_background_worker")()  # type: ignore[misc]
+                            self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="success", data={"background_worker_stopped": True}))
+                            api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                            return
+                        raise AttributeError("stop_background_worker")
+                    if path == "/v1/components/autonomous-controller/start":
+                        if hasattr(runtime, "start_autonomous_controller"):
+                            getattr(runtime, "start_autonomous_controller")()  # type: ignore[misc]
+                            self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="success", data={"autonomous_controller_started": True}))
+                            api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                            return
+                        raise AttributeError("start_autonomous_controller")
+                    if path == "/v1/components/autonomous-controller/stop":
+                        if hasattr(runtime, "stop_autonomous_controller"):
+                            getattr(runtime, "stop_autonomous_controller")()  # type: ignore[misc]
+                            self._respond_json(HTTPStatus.OK, api._response_envelope(ok=True, status="success", data={"autonomous_controller_stopped": True}))
+                            api._emit_event("request_completed", endpoint=path, method=method, http_status=HTTPStatus.OK)
+                            return
+                        raise AttributeError("stop_autonomous_controller")
+                except Exception as exc:
+                    code, status = api._map_failure(exc)
+                    self._respond_json(status, api._response_envelope(ok=False, status="error", error={"code": code, "message": _safe_message_for_code(code)}))
+                    api._emit_event("request_completed", endpoint=path, method=method, http_status=status, failure_code=code)
+                    return
+
+            # Unknown route
+            api._emit_event("request_rejected", endpoint=path, method=method, http_status=HTTPStatus.NOT_FOUND, failure_code="not_found")
+            self._respond_json(HTTPStatus.NOT_FOUND, api._response_envelope(ok=False, status="error", error={"code": "not_found", "message": "Unknown route"}))
+        except Exception:
+            api._emit_event("api_operation_failed", endpoint=path, method=method, http_status=HTTPStatus.INTERNAL_SERVER_ERROR, failure_code="internal_error")
+            self._respond_json(HTTPStatus.INTERNAL_SERVER_ERROR, api._response_envelope(ok=False, status="error", error={"code": "internal_error", "message": "An internal error occurred"}))
+
+    # Helpers
+    def _auth_error(self, http_status: int, failure_code: str) -> None:
+        api = self.server.api  # type: ignore[attr-defined]
+        if http_status == HTTPStatus.UNAUTHORIZED:
+            msg = "Missing authentication"
+        else:
+            msg = "Invalid authentication"
+        self._respond_json(http_status, api._response_envelope(ok=False, status="error", error={"code": failure_code, "message": msg}))
+
+    def _read_json_object(self, api: "RuntimePrivateAPI") -> Tuple[Dict[str, Any], int]:
+        # Validate Content-Length
+        cl_header = self.headers.get("Content-Length")
+        if cl_header is None:
+            raise _ImmediateError(HTTPStatus.BAD_REQUEST, "invalid_request", "Missing Content-Length header")
+        try:
+            content_length = int(cl_header)
+        except ValueError:
+            raise _ImmediateError(HTTPStatus.BAD_REQUEST, "invalid_request", "Invalid Content-Length header")
+
+        if content_length < 0:
+            raise _ImmediateError(HTTPStatus.BAD_REQUEST, "invalid_request", "Invalid Content-Length header")
+        if content_length > api.config.request_body_limit_bytes:
+            raise _ImmediateError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request_too_large", "Request body too large")
+
+        # Enforce socket timeout per-request
+        try:
+            self.connection.settimeout(float(api.config.request_timeout_seconds))
+        except Exception:
+            pass
+
+        # Read exactly content_length bytes (bounded)
+        remaining = content_length
+        chunks: List[bytes] = []
+        rcvd = 0
+        while remaining > 0:
+            to_read = min(remaining, 65536)
+            data = self.rfile.read(to_read)
+            if not data:
+                break
+            chunks.append(data)
+            rcvd += len(data)
+            remaining -= len(data)
+            if rcvd > api.config.request_body_limit_bytes:
+                raise _ImmediateError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request_too_large", "Request body too large")
+        if rcvd != content_length:
+            raise _ImmediateError(HTTPStatus.BAD_REQUEST, "invalid_request", "Incomplete request body")
+
+        raw = b"".join(chunks)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise _ImmediateError(HTTPStatus.BAD_REQUEST, "invalid_request", "Request body must be valid UTF-8 JSON")
+
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            raise _ImmediateError(HTTPStatus.BAD_REQUEST, "invalid_request", "Malformed JSON body")
+
+        if not isinstance(obj, dict):
+            raise _ImmediateError(HTTPStatus.BAD_REQUEST, "invalid_request", "JSON body must be an object")
+        return obj, rcvd
+
+    def _respond_json(self, status_code: int, payload: Dict[str, Any]) -> None:
+        # Deterministic JSON serialization
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        # Content-Length must be exact
+        content_length = len(data)
+        # Write headers and body
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if content_length:
+            self.wfile.write(data)
+        try:
+            self.wfile.flush()
+        except Exception:
+            pass
+        # Ensure connection is closed after response
+        self.close_connection = True
 
 
-class _EventRecorder:
-    def __init__(self, capacity: int = 1000) -> None:
-        self._capacity = capacity
-        self._events: List[Dict[str, Any]] = []
-        self._lock = threading.Lock()
+class _ImmediateError(Exception):
+    __slots__ = ("http_status", "code", "message")
 
-    def emit(self, event_type: str, **fields: Any) -> None:
-        e = {
-            "type": event_type,
-            "timestamp": _utc_timestamp_iso(),
-        }
-        for k, v in fields.items():
-            # Only safe fields should be included by callers
-            e[k] = v
-        with self._lock:
-            self._events.append(e)
-            if len(self._events) > self._capacity:
-                # Trim oldest
-                del self._events[0 : len(self._events) - self._capacity]
-
-    def latest(self, limit: int = 50) -> List[Dict[str, Any]]:
-        if limit <= 0:
-            return []
-        with self._lock:
-            return list(self._events[-limit:])
+    def __init__(self, http_status: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.code = code
+        self.message = message
 
 
-def _utc_timestamp_iso() -> str:
-    # Deterministic, timezone-aware ISO 8601 UTC timestamp
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-_FAILURE_HTTP_STATUS: Dict[str, int] = {
-    "invalid_request": 400,
-    "invalid_execution_outcome": 400,
-    "runtime_not_running": 409,
-    "invalid_runtime_transition": 409,
-    "duplicate_execution": 409,
-    "invalid_status_transition": 409,
-    "mission_not_found": 404,
-    "budget_blocked": 429,
-    "rate_limit_blocked": 429,
-    "unknown_project": 404,
-    "cross_project_reference": 403,
-    "no_model_available": 503,
-    "planner_failed": 503,
-    "queue_resolution_failed": 503,
-    "queue_failed": 503,
-    "usage_recording_failed": 503,
-    "report_persistence_failed": 503,
-    "dependency_failed": 503,
+_FAILURE_CODE_TO_HTTP: Dict[str, int] = {
+    "invalid_request": HTTPStatus.BAD_REQUEST,
+    "invalid_execution_outcome": HTTPStatus.BAD_REQUEST,
+    "runtime_not_running": HTTPStatus.CONFLICT,
+    "invalid_runtime_transition": HTTPStatus.CONFLICT,
+    "duplicate_execution": HTTPStatus.CONFLICT,
+    "invalid_status_transition": HTTPStatus.CONFLICT,
+    "mission_not_found": HTTPStatus.NOT_FOUND,
+    "unknown_project": HTTPStatus.NOT_FOUND,
+    "cross_project_reference": HTTPStatus.FORBIDDEN,
+    "budget_blocked": HTTPStatus.TOO_MANY_REQUESTS,
+    "rate_limit_blocked": HTTPStatus.TOO_MANY_REQUESTS,
+    "no_model_available": HTTPStatus.SERVICE_UNAVAILABLE,
+    "planner_failed": HTTPStatus.SERVICE_UNAVAILABLE,
+    "queue_resolution_failed": HTTPStatus.SERVICE_UNAVAILABLE,
+    "queue_failed": HTTPStatus.SERVICE_UNAVAILABLE,
+    "usage_recording_failed": HTTPStatus.SERVICE_UNAVAILABLE,
+    "report_persistence_failed": HTTPStatus.SERVICE_UNAVAILABLE,
+    "dependency_failed": HTTPStatus.SERVICE_UNAVAILABLE,
 }
 
-_SAFE_ERROR_MESSAGES: Dict[str, str] = {
-    "invalid_request": "The request is invalid.",
-    "invalid_execution_outcome": "The execution outcome is invalid.",
-    "runtime_not_running": "The runtime is not running.",
-    "invalid_runtime_transition": "The requested runtime transition is not allowed.",
-    "duplicate_execution": "The execution is a duplicate.",
-    "invalid_status_transition": "The requested status transition is not allowed.",
-    "mission_not_found": "The requested mission was not found.",
-    "budget_blocked": "Operation blocked by budget policy.",
-    "rate_limit_blocked": "Operation blocked by rate limit policy.",
-    "unknown_project": "The referenced project was not found.",
-    "cross_project_reference": "Cross-project reference is not allowed.",
-    "no_model_available": "No model is currently available.",
-    "planner_failed": "The planner failed to produce a plan.",
-    "queue_resolution_failed": "Queue resolution failed.",
-    "queue_failed": "Queue operation failed.",
-    "usage_recording_failed": "Usage recording failed.",
-    "report_persistence_failed": "Report persistence failed.",
-    "dependency_failed": "A required dependency failed.",
-    "unauthorized": "Authentication is required.",
-    "forbidden": "Invalid authentication provided.",
-    "unsupported_media_type": "Unsupported content type.",
-    "malformed_json": "Malformed JSON body.",
-    "payload_not_object": "A JSON object is required.",
-    "not_found": "Endpoint not found.",
-    "response_too_large": "Response exceeds configured size limit.",
-    "request_timeout": "Request timed out.",
-    "method_not_allowed": "HTTP method not allowed.",
-    "lifecycle_disabled": "Lifecycle endpoints are disabled.",
-    "internal_error": "An internal error occurred.",
-}
 
-
-def _extract_failure_code(exc: BaseException) -> Optional[str]:
-    # Try to resolve a structured failure code without exposing raw exception details
-    for attr in ("code", "error_code", "failure_code", "reason"):
-        val = getattr(exc, attr, None)
-        if isinstance(val, str) and val:
-            return val
-    # Heuristic fallback (avoid leaking messages; only match known codes in a safe way)
-    msg = str(exc).lower()
-    for code in _FAILURE_HTTP_STATUS.keys():
-        if code in msg:
-            return code
-    return None
-
-
-def _map_failure_to_status(code: Optional[str]) -> Tuple[int, str]:
-    if code and code in _FAILURE_HTTP_STATUS:
-        return _FAILURE_HTTP_STATUS[code], _SAFE_ERROR_MESSAGES.get(code, "Operation failed.")
-    if code == "unauthorized":
-        return HTTPStatus.UNAUTHORIZED, _SAFE_ERROR_MESSAGES[code]
-    if code == "forbidden":
-        return HTTPStatus.FORBIDDEN, _SAFE_ERROR_MESSAGES[code]
-    if code == "unsupported_media_type":
-        return HTTPStatus.UNSUPPORTED_MEDIA_TYPE, _SAFE_ERROR_MESSAGES[code]
-    if code == "malformed_json":
-        return HTTPStatus.BAD_REQUEST, _SAFE_ERROR_MESSAGES[code]
-    if code == "payload_not_object":
-        return HTTPStatus.BAD_REQUEST, _SAFE_ERROR_MESSAGES[code]
-    if code == "not_found":
-        return HTTPStatus.NOT_FOUND, _SAFE_ERROR_MESSAGES[code]
-    if code == "response_too_large":
-        return HTTPStatus.INTERNAL_SERVER_ERROR, _SAFE_ERROR_MESSAGES[code]
-    if code == "request_timeout":
-        return HTTPStatus.REQUEST_TIMEOUT, _SAFE_ERROR_MESSAGES[code]
-    if code == "method_not_allowed":
-        return HTTPStatus.METHOD_NOT_ALLOWED, _SAFE_ERROR_MESSAGES[code]
-    if code == "lifecycle_disabled":
-        return HTTPStatus.NOT_FOUND, _SAFE_ERROR_MESSAGES[code]
-    # Unknown failure -> 500
-    return HTTPStatus.INTERNAL_SERVER_ERROR, _SAFE_ERROR_MESSAGES["internal_error"]
+def _safe_message_for_code(code: str) -> str:
+    # Generic human-safe messages without leaking details
+    generic = {
+        "invalid_request": "The request is invalid",
+        "invalid_execution_outcome": "The execution outcome is invalid",
+        "runtime_not_running": "The runtime is not running",
+        "invalid_runtime_transition": "Invalid runtime transition",
+        "duplicate_execution": "Duplicate execution",
+        "invalid_status_transition": "Invalid status transition",
+        "mission_not_found": "Mission not found",
+        "unknown_project": "Unknown project",
+        "cross_project_reference": "Operation not permitted across projects",
+        "budget_blocked": "Budget limits prevent this operation",
+        "rate_limit_blocked": "Rate limit exceeded",
+        "no_model_available": "No model available",
+        "planner_failed": "Planner is unavailable",
+        "queue_resolution_failed": "A queue dependency failed",
+        "queue_failed": "Queue processing failed",
+        "usage_recording_failed": "Usage recording is unavailable",
+        "report_persistence_failed": "Report persistence is unavailable",
+        "dependency_failed": "A dependency is unavailable",
+    }
+    return generic.get(code, "An internal error occurred")
 
 
 class RuntimePrivateAPI:
-    def __init__(
-        self,
-        config: RuntimeAPIConfig,
-        runtime: Optional[Any] = None,
-        token_resolver: Optional[Callable[[str], Optional[str]]] = None,
-    ) -> None:
-        _validate_runtime_api_config(config)
-        self._config = config
-        self._runtime = runtime
-        self._server: Optional[ThreadingHTTPServer] = None
-        self._thread: Optional[threading.Thread] = None
+    def __init__(self, config: RuntimeAPIConfig, runtime: Optional[Any] = None) -> None:
+        self.config = self._validate_config(config)
+        self.runtime = runtime
+        self._server: Optional[_RuntimePrivateHTTPServer] = None
+        self._state_lock = threading.Lock()
+        self._state: str = "created"
         self._bound_host: Optional[str] = None
         self._bound_port: Optional[int] = None
-        self._events = _EventRecorder()
-        # Lazy resolver; if None, default to environment variable lookup
-        self._token_resolver = token_resolver
-        self._events.emit("api_created")
+        self._events: Deque[Dict[str, Any]] = deque(maxlen=1000)
+        self._auth_token_cached: Optional[str] = None
+        self._thread: Optional[threading.Thread] = None
+        self._emit_event("api_created")
+
+    # Lifecycle
+    def start(self) -> None:
+        with self._state_lock:
+            if self._server is not None:
+                # Idempotent
+                return
+            self._state = "starting"
+            self._emit_event("api_starting")
+            try:
+                handler_cls = _RequestHandler
+                # Bind immediately; constructor binds socket
+                server = _RuntimePrivateHTTPServer((self.config.host, self.config.port), handler_cls, api=self)
+                self._server = server
+                # Store bound address
+                addr = server.server_address
+                # server_address may be (host, port) or (host, port, *rest)
+                host = addr[0]
+                port = addr[1]
+                self._bound_host = str(host)
+                self._bound_port = int(port)
+                self._state = "started"
+                self._emit_event("api_started")
+            except Exception:
+                # Ensure resources are cleaned up on failure
+                try:
+                    if self._server is not None:
+                        self._server.server_close()
+                except Exception:
+                    pass
+                self._server = None
+                self._bound_host = None
+                self._bound_port = None
+                self._state = "failed"
+                self._emit_event("api_start_failed")
+                raise
+
+    def serve_forever(self) -> None:
+        # This should be called after start(); it blocks serving requests until shutdown
+        srv = self._server
+        if srv is None:
+            raise RuntimeError("API server is not started")
+        # Ensure the poll interval is short but bounded
+        try:
+            srv.serve_forever(poll_interval=0.5)
+        finally:
+            pass
+
+    def stop(self) -> None:
+        # Request server shutdown; do not hold lock while blocking
+        srv = None
+        with self._state_lock:
+            srv = self._server
+            if srv is None:
+                return
+            self._state = "stopping"
+            self._emit_event("api_stopping")
+        # Call shutdown from a different thread to avoid deadlocks
+        def _shutdown_server(s: _RuntimePrivateHTTPServer) -> None:
+            try:
+                s.shutdown()
+            except Exception:
+                pass
+        t = threading.Thread(target=_shutdown_server, args=(srv,), name="RuntimePrivateAPI-Shutdown", daemon=True)
+        t.start()
+        t.join(timeout=float(self.config.graceful_shutdown_timeout_seconds))
+        with self._state_lock:
+            self._state = "stopped"
+            self._emit_event("api_stopped")
+
+    def close(self) -> None:
+        with self._state_lock:
+            srv = self._server
+            if srv is None:
+                # Idempotent
+                return
+            try:
+                srv.server_close()
+            except Exception:
+                pass
+            finally:
+                self._server = None
+                self._bound_host = None
+                self._bound_port = None
+                self._thread = None
+
+    # Status helpers
+    def status(self) -> Dict[str, Any]:
+        with self._state_lock:
+            return {
+                "state": self._state,
+                "address": (self._bound_host, self._bound_port) if self._bound_host and self._bound_port else None,
+            }
+
+    def address(self) -> Optional[Tuple[str, int]]:
+        with self._state_lock:
+            if self._bound_host is None or self._bound_port is None:
+                return None
+            return (self._bound_host, self._bound_port)
+
+    def latest_events(self, limit: int = 50) -> List[Dict[str, Any]]:
+        if limit <= 0:
+            limit = 1
+        if limit > 1000:
+            limit = 1000
+        return list(list(self._events)[-limit:])
 
     # Context manager support
     def __enter__(self) -> "RuntimePrivateAPI":
@@ -282,890 +533,347 @@ class RuntimePrivateAPI:
         finally:
             self.close()
 
-    def start(self) -> None:
-        if self._server is not None:
-            # Idempotent
-            return
-        self._events.emit("api_starting")
+    # Internal utilities
+    def _emit_event(self, event_type: str, **fields: Any) -> None:
+        safe_event = {
+            "event": event_type,
+            "timestamp": _now_iso(),
+        }
+        for k in ("endpoint", "method", "http_status", "failure_code", "request_id"):
+            if k in fields and fields[k] is not None:
+                safe_event[k] = fields[k]
+        # runtime state snapshot (safe)
+        safe_event["runtime_state"] = None
         try:
-            # Build and bind the HTTP server before returning
-            handler_cls = self._make_handler_class()
-            # Ensure binding happens in constructor
-            server = ThreadingHTTPServer((self._config.host, self._config.port), handler_cls, bind_and_activate=True)
-            # Attach back-reference for handler access
-            setattr(server, "_api", self)
-            # Socket timeout for handling requests
-            server.timeout = 1.0
-            self._server = server
-            # Store actual bound address (handles ephemeral port 0)
-            sa = server.server_address
-            self._bound_host = sa[0]
-            self._bound_port = int(sa[1])
-
-            # Start serving thread
-            t = threading.Thread(target=server.serve_forever, name="RuntimePrivateAPI-HTTPServer", daemon=True)
-            self._thread = t
-            t.start()
-
-            # Readiness: server is already bound; thread started
-            self._events.emit("api_started")
+            status_obj = self._safe_runtime_status()
+            safe_event["runtime_state"] = status_obj.get("state")
         except Exception:
-            # Ensure cleanup on failure
-            try:
-                if self._server is not None:
-                    self._server.server_close()
-            finally:
-                self._server = None
-                self._thread = None
-                self._bound_host = None
-                self._bound_port = None
-            self._events.emit("api_start_failed")
-            raise
-
-    def serve_forever(self) -> None:
-        # Blocking serve utilizing existing thread/loop semantics; if not started, start inline server loop
-        if self._server is None:
-            self.start()
-        # The internal ThreadingHTTPServer is already serving in a daemon thread. Block here until interrupted.
-        try:
-            while self._server is not None and self._thread is not None and self._thread.is_alive():
-                time.sleep(0.2)
-        except KeyboardInterrupt:
             pass
+        self._events.append(safe_event)
 
-    def stop(self) -> None:
-        server = self._server
-        thread = self._thread
-        if server is None:
-            return
-        self._events.emit("api_stopping")
-        # Do not hold locks while calling shutdown to avoid deadlocks
-        try:
-            server.shutdown()
-        except Exception:
-            # Suppress to avoid exposing internals; still proceed to close
-            self._events.emit("api_operation_failed", endpoint="__shutdown__")
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=float(self._config.graceful_shutdown_timeout_seconds))
-        self._events.emit("api_stopped")
+    def _response_envelope(self, *, ok: bool, status: str, data: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None, request_id: Optional[str] = None) -> Dict[str, Any]:
+        envelope: Dict[str, Any] = {
+            "ok": bool(ok),
+            "status": status,
+            "timestamp": _now_iso(),
+        }
+        if request_id:
+            envelope["request_id"] = request_id
+        if data is not None:
+            envelope["data"] = data
+        if error is not None:
+            # Never include sensitive information
+            clean_error = {}
+            if "code" in error and isinstance(error["code"], str):
+                clean_error["code"] = error["code"]
+            if "message" in error and isinstance(error["message"], str):
+                clean_error["message"] = error["message"]
+            envelope["error"] = clean_error
+        return envelope
 
-    def close(self) -> None:
-        server = self._server
-        if server is not None:
+    def _validate_config(self, config: RuntimeAPIConfig) -> RuntimeAPIConfig:
+        # Host validation
+        host = config.host.strip()
+        if not host:
+            raise ValueError("host must be non-empty")
+        if host in ("0.0.0.0", "::"):
+            raise ValueError("Wildcard public hosts are not allowed")
+        # Port validation
+        port = int(config.port)
+        if port < 0 or port > 65535:
+            raise ValueError("port must be between 0 and 65535")
+        # Limits
+        if config.request_body_limit_bytes <= 0 or config.response_body_limit_bytes <= 0:
+            raise ValueError("body limits must be positive integers")
+        # Timeouts
+        if config.request_timeout_seconds <= 0 or config.graceful_shutdown_timeout_seconds <= 0:
+            raise ValueError("timeouts must be positive integers")
+        # Authentication config is allowed to be empty at construction per contract
+        return config
+
+    def _get_auth_token(self) -> Optional[str]:
+        # Lazy token resolution
+        if self._auth_token_cached is not None:
+            return self._auth_token_cached
+        ref = self.config.auth_token_reference
+        resolver = self.config.auth_token_resolver
+        token: Optional[str] = None
+        if resolver is not None and isinstance(ref, str) and ref != "":
             try:
-                server.server_close()
+                token = resolver(ref)
             except Exception:
-                pass
-        # Clear refs for idempotency
-        self._server = None
-        self._thread = None
-        self._bound_host = None
-        self._bound_port = None
+                token = None
+        # Cache even empty to avoid repeated resolver calls; empty will be treated as unresolved
+        self._auth_token_cached = token if token else None
+        return self._auth_token_cached
 
-    def status(self) -> Dict[str, Any]:
-        state = "running" if (self._server is not None and self._thread is not None and self._thread.is_alive()) else "stopped"
-        return {
-            "state": state,
-            "timestamp": _utc_timestamp_iso(),
-            "address": self.address(),
-        }
+    def _check_auth(self, headers: MutableMapping[str, str]) -> Tuple[bool, int, str]:
+        # Returns (authorized, http_status, failure_code)
+        auth_header = headers.get("Authorization")
+        if not auth_header:
+            return (False, HTTPStatus.UNAUTHORIZED, "missing_authentication")
+        parts = auth_header.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return (False, HTTPStatus.FORBIDDEN, "invalid_authentication")
+        provided_token = parts[1]
+        expected = self._get_auth_token()
+        if not expected:
+            # Unresolved configuration treated as invalid authentication when a header is provided
+            return (False, HTTPStatus.FORBIDDEN, "invalid_authentication")
+        try:
+            match = hmac.compare_digest(provided_token, expected)
+        except Exception:
+            match = False
+        if not match:
+            return (False, HTTPStatus.FORBIDDEN, "invalid_authentication")
+        return (True, HTTPStatus.OK, "")
 
-    def address(self) -> Optional[Tuple[str, int]]:
-        if self._bound_host is None or self._bound_port is None:
-            return None
-        return self._bound_host, int(self._bound_port)
-
-    def latest_events(self, limit: int = 50) -> List[Dict[str, Any]]:
-        return self._events.latest(limit)
-
-    # -------- Internal utilities --------
-
-    def _make_handler_class(self):
-        api = self
-        cfg = self._config
-
-        class Handler(BaseHTTPRequestHandler):  # type: ignore[misc]
-            server_version = "RuntimePrivateAPI/1.0"
-            protocol_version = "HTTP/1.1"
-
-            def log_request(self, code: Union[int, str] = "-", size: Union[int, str] = "-") -> None:  # noqa: D401
-                # Silence default logging to avoid leaking information
-                return
-
-            def log_message(self, format: str, *args: Any) -> None:  # noqa: D401
-                # Silence default logging to avoid leaking information
-                return
-
-            # -------------------- Helpers --------------------
-            def _request_id(self) -> str:
-                return uuid.uuid4().hex
-
-            def _emit(self, event_type: str, **fields: Any) -> None:
+    def _safe_runtime_status(self) -> Dict[str, Any]:
+        # Use provided runtime_status function if available in repository; do not import at module import time
+        runtime = self.runtime
+        if runtime is None:
+            return {"state": "unavailable", "application_ready": False}
+        try:
+            # Delayed import to avoid hard dependency at import time
+            from importlib import import_module
+            try:
+                # Attempt common location; repository should provide a runtime_status function
+                mod = import_module("agent.runtime")
+            except Exception:
+                # Fallback to alternative names if needed
                 try:
-                    api._events.emit(event_type, **fields)
+                    mod = import_module("runtime")
                 except Exception:
-                    # Never let event emission break request handling
-                    pass
+                    mod = None  # type: ignore[assignment]
+            if mod is not None and hasattr(mod, "runtime_status"):
+                return dict(getattr(mod, "runtime_status")(runtime))  # type: ignore[misc]
+        except Exception:
+            pass
+        # Last-resort safe status without exposing internals
+        try:
+            # If runtime has a status() method, call it safely
+            if hasattr(runtime, "status"):
+                st = getattr(runtime, "status")()
+                if isinstance(st, dict):
+                    # Sanitize keys
+                    safe = {k: v for k, v in st.items() if k in ("state", "application_ready")}
+                    if safe:
+                        return safe
+        except Exception:
+            pass
+        return {"state": "unknown", "application_ready": False}
 
-            def _set_common_headers(self, code: int, extra: Optional[Mapping[str, str]] = None) -> None:
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                if extra:
-                    for k, v in extra.items():
-                        self.send_header(k, v)
-                self.end_headers()
-
-            def _write_body(self, payload: Mapping[str, Any]) -> None:
-                try:
-                    b = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-                except Exception:
-                    # Fallback to a minimal generic error if serialization fails
-                    fb = {
-                        "ok": False,
-                        "status": int(HTTPStatus.INTERNAL_SERVER_ERROR),
-                        "timestamp": _utc_timestamp_iso(),
-                        "error": {
-                            "code": "internal_error",
-                            "message": _SAFE_ERROR_MESSAGES["internal_error"],
-                        },
-                    }
-                    b = json.dumps(fb, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-                # Enforce response size cap
-                if len(b) > cfg.response_body_limit_bytes:
-                    small = {
-                        "ok": False,
-                        "status": int(HTTPStatus.INTERNAL_SERVER_ERROR),
-                        "timestamp": _utc_timestamp_iso(),
-                        "error": {
-                            "code": "response_too_large",
-                            "message": _SAFE_ERROR_MESSAGES["response_too_large"],
-                        },
-                    }
-                    b = json.dumps(small, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-                try:
-                    self.wfile.write(b)
-                except Exception:
-                    # Best effort; do not raise further
-                    pass
-
-            def _auth_check(self, endpoint: str, request_id: str) -> Optional[Tuple[int, Dict[str, Any], Mapping[str, str]]]:
-                # Returns (status_code, body, extra_headers) on failure; None on success
-                # Allow unauthenticated access for /health/live only
-                path = self.path.split("?", 1)[0]
-                if self.command == "GET" and path == "/health/live":
-                    return None
-
-                # Lazy resolve expected token
-                expected_token: Optional[str] = None
-                if cfg.auth_token_reference:
-                    try:
-                        if api._token_resolver is not None:
-                            expected_token = api._token_resolver(cfg.auth_token_reference)
-                        else:
-                            # Default to environment variable resolver
-                            expected_token = os.environ.get(cfg.auth_token_reference)  # type: ignore[str-bytes-safe]
-                    except Exception:
-                        expected_token = None
-                # Extract provided token from Authorization header
-                authz = self.headers.get("Authorization")
-                if not authz:
-                    self._emit(
-                        "authentication_failed",
-                        endpoint=endpoint,
-                        method=self.command,
-                        status=int(HTTPStatus.UNAUTHORIZED),
-                    )
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.UNAUTHORIZED),
-                        request_id=request_id,
-                        error_code="unauthorized",
-                    )
-                    return int(HTTPStatus.UNAUTHORIZED), body, {"WWW-Authenticate": "Bearer"}
-
-                provided_token = None
-                if isinstance(authz, str):
-                    parts = authz.split(" ")
-                    if len(parts) == 2 and parts[0].lower() == "bearer":
-                        provided_token = parts[1]
-
-                if not provided_token:
-                    self._emit(
-                        "authentication_failed",
-                        endpoint=endpoint,
-                        method=self.command,
-                        status=int(HTTPStatus.UNAUTHORIZED),
-                    )
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.UNAUTHORIZED),
-                        request_id=request_id,
-                        error_code="unauthorized",
-                    )
-                    return int(HTTPStatus.UNAUTHORIZED), body, {"WWW-Authenticate": "Bearer"}
-
-                # If we do not have an expected token configured/resolved, treat as unauthorized (missing auth)
-                if not expected_token:
-                    self._emit(
-                        "authentication_failed",
-                        endpoint=endpoint,
-                        method=self.command,
-                        status=int(HTTPStatus.UNAUTHORIZED),
-                    )
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.UNAUTHORIZED),
-                        request_id=request_id,
-                        error_code="unauthorized",
-                    )
-                    return int(HTTPStatus.UNAUTHORIZED), body, {"WWW-Authenticate": "Bearer"}
-
-                # Constant-time comparison
-                try:
-                    if not hmac.compare_digest(str(provided_token), str(expected_token)):
-                        self._emit(
-                            "authentication_failed",
-                            endpoint=endpoint,
-                            method=self.command,
-                            status=int(HTTPStatus.FORBIDDEN),
-                        )
-                        body = _make_response_body(
-                            ok=False,
-                            status=int(HTTPStatus.FORBIDDEN),
-                            request_id=request_id,
-                            error_code="forbidden",
-                        )
-                        return int(HTTPStatus.FORBIDDEN), body, {}
-                except Exception:
-                    self._emit(
-                        "authentication_failed",
-                        endpoint=endpoint,
-                        method=self.command,
-                        status=int(HTTPStatus.FORBIDDEN),
-                    )
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.FORBIDDEN),
-                        request_id=request_id,
-                        error_code="forbidden",
-                    )
-                    return int(HTTPStatus.FORBIDDEN), body, {}
-                return None
-
-            def _read_json_object(self, request_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[int, Dict[str, Any]]]]:
-                # Enforce content type
-                ct = self.headers.get("Content-Type", "")
-                if not isinstance(ct, str) or ("application/json" not in ct.lower()):
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.UNSUPPORTED_MEDIA_TYPE),
-                        request_id=request_id,
-                        error_code="unsupported_media_type",
-                    )
-                    return None, (int(HTTPStatus.UNSUPPORTED_MEDIA_TYPE), body)
-
-                # Determine length
-                length_header = self.headers.get("Content-Length")
-                try:
-                    content_length = int(length_header) if length_header is not None else -1
-                except (TypeError, ValueError):
-                    content_length = -1
-
-                # Apply a hard cap while reading to defend against missing/incorrect length
-                max_to_read = cfg.request_body_limit_bytes + 1
-
-                # Set socket timeout for reading body
-                try:
-                    if hasattr(self.connection, "settimeout"):
-                        self.connection.settimeout(float(cfg.request_timeout_seconds))
-                except Exception:
-                    pass
-
-                try:
-                    if content_length >= 0:
-                        to_read = min(content_length, max_to_read)
-                        data = self.rfile.read(to_read)
-                        # If the declared content length exceeds limit or if actual bytes exceed limit
-                        if content_length > cfg.request_body_limit_bytes or len(data) > cfg.request_body_limit_bytes:
-                            body = _make_response_body(
-                                ok=False,
-                                status=int(HTTPStatus.REQUEST_ENTITY_TOO_LARGE),
-                                request_id=request_id,
-                                error_code="invalid_request",
-                            )
-                            return None, (int(HTTPStatus.REQUEST_ENTITY_TOO_LARGE), body)
-                        raw = data
-                    else:
-                        # Unknown length; read up to cap
-                        chunks: List[bytes] = []
-                        total = 0
-                        while total <= cfg.request_body_limit_bytes:
-                            chunk = self.rfile.read(min(65536, cfg.request_body_limit_bytes - total + 1))
-                            if not chunk:
-                                break
-                            chunks.append(chunk)
-                            total += len(chunk)
-                            if total > cfg.request_body_limit_bytes:
-                                break
-                        if total > cfg.request_body_limit_bytes:
-                            body = _make_response_body(
-                                ok=False,
-                                status=int(HTTPStatus.REQUEST_ENTITY_TOO_LARGE),
-                                request_id=request_id,
-                                error_code="invalid_request",
-                            )
-                            return None, (int(HTTPStatus.REQUEST_ENTITY_TOO_LARGE), body)
-                        raw = b"".join(chunks)
-                except socket.timeout:
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.REQUEST_TIMEOUT),
-                        request_id=request_id,
-                        error_code="request_timeout",
-                    )
-                    return None, (int(HTTPStatus.REQUEST_TIMEOUT), body)
-                except Exception:
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.BAD_REQUEST),
-                        request_id=request_id,
-                        error_code="invalid_request",
-                    )
-                    return None, (int(HTTPStatus.BAD_REQUEST), body)
-
-                try:
-                    text = raw.decode("utf-8")
-                except Exception:
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.BAD_REQUEST),
-                        request_id=request_id,
-                        error_code="malformed_json",
-                    )
-                    return None, (int(HTTPStatus.BAD_REQUEST), body)
-
-                try:
-                    parsed = json.loads(text)
-                except Exception:
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.BAD_REQUEST),
-                        request_id=request_id,
-                        error_code="malformed_json",
-                    )
-                    return None, (int(HTTPStatus.BAD_REQUEST), body)
-
-                if not isinstance(parsed, dict):
-                    body = _make_response_body(
-                        ok=False,
-                        status=int(HTTPStatus.BAD_REQUEST),
-                        request_id=request_id,
-                        error_code="payload_not_object",
-                    )
-                    return None, (int(HTTPStatus.BAD_REQUEST), body)
-
-                return parsed, None
-
-            def _runtime(self) -> Any:
-                return api._runtime
-
-            # -------------------- Endpoints --------------------
-            def do_GET(self) -> None:  # noqa: N802
-                req_id = self._request_id()
-                path = self.path.split("?", 1)[0]
-                self._emit("request_received", endpoint=path, method="GET")
-
-                if path == "/health/live":
-                    body = _make_response_body(
-                        ok=True,
-                        status=int(HTTPStatus.OK),
-                        request_id=req_id,
-                        data={"alive": True},
-                    )
-                    self._set_common_headers(int(HTTPStatus.OK))
-                    self._write_body(body)
-                    self._emit("request_completed", endpoint=path, method="GET", status=int(HTTPStatus.OK))
-                    return
-
-                # Auth required for all other GET
-                auth_fail = self._auth_check(endpoint=path, request_id=req_id)
-                if auth_fail is not None:
-                    code, body, extra = auth_fail
-                    self._set_common_headers(code, extra)
-                    self._write_body(body)
-                    return
-
-                if path == "/health/ready":
-                    # Determine readiness via runtime status
-                    try:
-                        runtime = self._runtime()
-                        ready = False
-                        if runtime is not None:
-                            try:
-                                st = runtime.status()  # type: ignore[call-arg]
-                            except TypeError:
-                                # Some runtimes may expose 'status' attribute
-                                st = getattr(runtime, "status", None)
-                            state = None
-                            app_ready = None
-                            if isinstance(st, Mapping):
-                                state = str(st.get("state") or st.get("runtime_state") or "").lower()
-                                ar = st.get("application_ready")
-                                app_ready = bool(ar) if isinstance(ar, (bool, int)) else False
-                            ready = (state == "running") and bool(app_ready)
-                        if ready:
-                            body = _make_response_body(
-                                ok=True,
-                                status=int(HTTPStatus.OK),
-                                request_id=req_id,
-                                data={"ready": True},
-                            )
-                            self._set_common_headers(int(HTTPStatus.OK))
-                            self._write_body(body)
-                            self._emit("request_completed", endpoint=path, method="GET", status=int(HTTPStatus.OK))
-                            return
-                        else:
-                            body = _make_response_body(
-                                ok=False,
-                                status=int(HTTPStatus.SERVICE_UNAVAILABLE),
-                                request_id=req_id,
-                                error_code=None,
-                            )
-                            self._set_common_headers(int(HTTPStatus.SERVICE_UNAVAILABLE))
-                            self._write_body(body)
-                            self._emit(
-                                "request_completed", endpoint=path, method="GET", status=int(HTTPStatus.SERVICE_UNAVAILABLE)
-                            )
-                            return
-                    except Exception as exc:
-                        code, msg = _map_failure_to_status(_extract_failure_code(exc))
-                        body = _make_response_body(
-                            ok=False,
-                            status=code,
-                            request_id=req_id,
-                            error_code=None,
-                        )
-                        self._set_common_headers(code)
-                        self._write_body(body)
-                        self._emit("api_operation_failed", endpoint=path, method="GET", status=code)
-                        return
-
-                if path == "/v1/runtime/status":
-                    try:
-                        runtime = self._runtime()
-                        if runtime is None:
-                            raise RuntimeError("runtime_not_running")
-                        # Prefer a safe status view from runtime
-                        try:
-                            st = runtime.status()  # type: ignore[call-arg]
-                        except TypeError:
-                            st = getattr(runtime, "status", None)
-                        if not isinstance(st, Mapping):
-                            st = {"state": str(st)}
-                        data = {"runtime": dict(st)}
-                        body = _make_response_body(
-                            ok=True,
-                            status=int(HTTPStatus.OK),
-                            request_id=req_id,
-                            data=data,
-                        )
-                        self._set_common_headers(int(HTTPStatus.OK))
-                        self._write_body(body)
-                        self._emit("request_completed", endpoint=path, method="GET", status=int(HTTPStatus.OK))
-                        return
-                    except Exception as exc:
-                        code, _ = _map_failure_to_status(_extract_failure_code(exc))
-                        body = _make_response_body(
-                            ok=False,
-                            status=code,
-                            request_id=req_id,
-                            error_code=None,
-                        )
-                        self._set_common_headers(code)
-                        self._write_body(body)
-                        self._emit("api_operation_failed", endpoint=path, method="GET", status=code)
-                        return
-
-                # Not found
-                body = _make_response_body(
-                    ok=False,
-                    status=int(HTTPStatus.NOT_FOUND),
-                    request_id=req_id,
-                    error_code="not_found",
-                )
-                self._set_common_headers(int(HTTPStatus.NOT_FOUND))
-                self._write_body(body)
-                self._emit("request_rejected", endpoint=path, method="GET", status=int(HTTPStatus.NOT_FOUND))
-
-            def do_POST(self) -> None:  # noqa: N802
-                req_id = self._request_id()
-                path = self.path.split("?", 1)[0]
-                self._emit("request_received", endpoint=path, method="POST")
-
-                # Auth required for all POST endpoints
-                auth_fail = self._auth_check(endpoint=path, request_id=req_id)
-                if auth_fail is not None:
-                    code, body, extra = auth_fail
-                    self._set_common_headers(code, extra)
-                    self._write_body(body)
-                    return
-
-                # Routing
-                if path == "/v1/requests":
-                    payload, err = self._read_json_object(req_id)
-                    if err is not None:
-                        code, body = err
-                        self._set_common_headers(code)
-                        self._write_body(body)
-                        self._emit("request_rejected", endpoint=path, method="POST", status=code)
-                        return
-                    try:
-                        runtime = self._runtime()
-                        if runtime is None:
-                            raise RuntimeError("runtime_not_running")
-                        result = runtime.submit_request(payload)  # type: ignore[attr-defined]
-                        request_id_val: Optional[str] = None
-                        if isinstance(result, Mapping):
-                            rid = result.get("request_id")
-                            if isinstance(rid, str):
-                                request_id_val = rid
-                        body = _make_response_body(
-                            ok=True,
-                            status=int(HTTPStatus.ACCEPTED),
-                            request_id=req_id,
-                            request_id_out=request_id_val,
-                            data=None,
-                        )
-                        self._set_common_headers(int(HTTPStatus.ACCEPTED))
-                        self._write_body(body)
-                        self._emit("request_completed", endpoint=path, method="POST", status=int(HTTPStatus.ACCEPTED))
-                        return
-                    except Exception as exc:
-                        code, _msg = _map_failure_to_status(_extract_failure_code(exc))
-                        if code == HTTPStatus.INTERNAL_SERVER_ERROR:
-                            err_code = "internal_error"
-                        else:
-                            # try to pass through known failure code safely
-                            err_code = _extract_failure_code(exc)
-                        body = _make_response_body(
-                            ok=False,
-                            status=code,
-                            request_id=req_id,
-                            error_code=err_code,
-                        )
-                        self._set_common_headers(code)
-                        self._write_body(body)
-                        self._emit("api_operation_failed", endpoint=path, method="POST", status=code)
-                        return
-
-                if path == "/v1/execution-outcomes":
-                    payload, err = self._read_json_object(req_id)
-                    if err is not None:
-                        code, body = err
-                        self._set_common_headers(code)
-                        self._write_body(body)
-                        self._emit("request_rejected", endpoint=path, method="POST", status=code)
-                        return
-                    try:
-                        runtime = self._runtime()
-                        if runtime is None:
-                            raise RuntimeError("runtime_not_running")
-                        runtime.process_execution_outcome(payload)  # type: ignore[attr-defined]
-                        body = _make_response_body(
-                            ok=True,
-                            status=int(HTTPStatus.OK),
-                            request_id=req_id,
-                            data={"processed": True},
-                        )
-                        self._set_common_headers(int(HTTPStatus.OK))
-                        self._write_body(body)
-                        self._emit("request_completed", endpoint=path, method="POST", status=int(HTTPStatus.OK))
-                        return
-                    except Exception as exc:
-                        code, _msg = _map_failure_to_status(_extract_failure_code(exc))
-                        if code == HTTPStatus.INTERNAL_SERVER_ERROR:
-                            err_code = "internal_error"
-                        else:
-                            err_code = _extract_failure_code(exc)
-                        body = _make_response_body(
-                            ok=False,
-                            status=code,
-                            request_id=req_id,
-                            error_code=err_code,
-                        )
-                        self._set_common_headers(code)
-                        self._write_body(body)
-                        self._emit("api_operation_failed", endpoint=path, method="POST", status=code)
-                        return
-
-                # Lifecycle endpoints (guarded by flag)
-                lifecycle_allowed = bool(cfg.enable_lifecycle_endpoints)
-                if path in (
-                    "/v1/runtime/start",
-                    "/v1/runtime/stop",
-                    "/v1/components/background-worker/start",
-                    "/v1/components/background-worker/stop",
-                    "/v1/components/autonomous-controller/start",
-                    "/v1/components/autonomous-controller/stop",
-                ):
-                    if not lifecycle_allowed:
-                        code, msg = _map_failure_to_status("lifecycle_disabled")
-                        body = _make_response_body(
-                            ok=False, status=code, request_id=req_id, error_code="lifecycle_disabled"
-                        )
-                        self._set_common_headers(code)
-                        self._write_body(body)
-                        self._emit("request_rejected", endpoint=path, method="POST", status=code)
-                        return
-                    try:
-                        runtime = self._runtime()
-                        if runtime is None:
-                            raise RuntimeError("runtime_not_running")
-                        if path == "/v1/runtime/start":
-                            getattr(runtime, "start")()  # type: ignore[attr-defined]
-                        elif path == "/v1/runtime/stop":
-                            getattr(runtime, "stop")()  # type: ignore[attr-defined]
-                        elif path == "/v1/components/background-worker/start":
-                            getattr(runtime, "start_background_worker")()  # type: ignore[attr-defined]
-                        elif path == "/v1/components/background-worker/stop":
-                            getattr(runtime, "stop_background_worker")()  # type: ignore[attr-defined]
-                        elif path == "/v1/components/autonomous-controller/start":
-                            getattr(runtime, "start_autonomous_controller")()  # type: ignore[attr-defined]
-                        elif path == "/v1/components/autonomous-controller/stop":
-                            getattr(runtime, "stop_autonomous_controller")()  # type: ignore[attr-defined]
-                        else:
-                            raise RuntimeError("not_found")
-                        body = _make_response_body(
-                            ok=True, status=int(HTTPStatus.OK), request_id=req_id, data={"accepted": True}
-                        )
-                        self._set_common_headers(int(HTTPStatus.OK))
-                        self._write_body(body)
-                        self._emit("request_completed", endpoint=path, method="POST", status=int(HTTPStatus.OK))
-                        return
-                    except Exception as exc:
-                        code, _ = _map_failure_to_status(_extract_failure_code(exc))
-                        if code == HTTPStatus.INTERNAL_SERVER_ERROR:
-                            err_code = "internal_error"
-                        else:
-                            err_code = _extract_failure_code(exc)
-                        body = _make_response_body(
-                            ok=False, status=code, request_id=req_id, error_code=err_code
-                        )
-                        self._set_common_headers(code)
-                        self._write_body(body)
-                        self._emit("api_operation_failed", endpoint=path, method="POST", status=code)
-                        return
-
-                # Default: not found or method not allowed
-                body = _make_response_body(
-                    ok=False,
-                    status=int(HTTPStatus.NOT_FOUND),
-                    request_id=req_id,
-                    error_code="not_found",
-                )
-                self._set_common_headers(int(HTTPStatus.NOT_FOUND))
-                self._write_body(body)
-                self._emit("request_rejected", endpoint=path, method="POST", status=int(HTTPStatus.NOT_FOUND))
-
-            def do_PUT(self) -> None:  # noqa: N802
-                self._method_not_allowed()
-
-            def do_DELETE(self) -> None:  # noqa: N802
-                self._method_not_allowed()
-
-            def _method_not_allowed(self) -> None:
-                req_id = self._request_id()
-                path = self.path.split("?", 1)[0]
-                body = _make_response_body(
-                    ok=False, status=int(HTTPStatus.METHOD_NOT_ALLOWED), request_id=req_id, error_code="method_not_allowed"
-                )
-                self._set_common_headers(int(HTTPStatus.METHOD_NOT_ALLOWED))
-                self._write_body(body)
-                self._emit("request_rejected", endpoint=path, method=self.command, status=int(HTTPStatus.METHOD_NOT_ALLOWED))
-
-        return Handler
+    def _map_failure(self, exc: Exception) -> Tuple[str, int]:
+        # Try to extract a structured error code from known attributes
+        code: Optional[str] = None
+        for attr in ("code", "error_code", "reason"):
+            if hasattr(exc, attr):
+                v = getattr(exc, attr)
+                if isinstance(v, str) and v:
+                    code = v
+                    break
+        # Heuristics for common Python exceptions
+        if code is None:
+            if isinstance(exc, ValueError):
+                code = "invalid_request"
+            elif isinstance(exc, KeyError):
+                code = "invalid_request"
+            elif isinstance(exc, PermissionError):
+                code = "cross_project_reference"
+            elif isinstance(exc, TimeoutError):
+                code = "dependency_failed"
+            elif isinstance(exc, RuntimeError) and str(exc) == "runtime_unavailable":
+                code = "dependency_failed"
+        if code is None or not isinstance(code, str):
+            # Unknown failure
+            return ("internal_error", HTTPStatus.INTERNAL_SERVER_ERROR)
+        http = _FAILURE_CODE_TO_HTTP.get(code, HTTPStatus.INTERNAL_SERVER_ERROR)
+        return (code, http)
 
 
-def _make_response_body(
-    *,
-    ok: bool,
-    status: int,
-    request_id: Optional[str] = None,
-    request_id_out: Optional[str] = None,
-    data: Optional[Mapping[str, Any]] = None,
-    error_code: Optional[str] = None,
-) -> Dict[str, Any]:
-    body: Dict[str, Any] = {
-        "ok": bool(ok),
-        "status": int(status),
-        "timestamp": _utc_timestamp_iso(),
-    }
-    if request_id:
-        body["request_id"] = request_id
-    if request_id_out:
-        body["request_id"] = request_id_out  # expose when safely available (override for outward id)
-    if data is not None:
-        # Copy to avoid accidental mutation
-        body["data"] = dict(data)
+def build_runtime_private_api(config: Union[RuntimeAPIConfig, Mapping[str, Any]], runtime: Optional[Any] = None) -> RuntimePrivateAPI:
+    # Accept dict-like config to simplify external construction
+    if isinstance(config, Mapping):
+        cfg = RuntimeAPIConfig.from_dict(config)
+    elif isinstance(config, RuntimeAPIConfig):
+        cfg = config
     else:
-        body["data"] = None
-    if not ok:
-        code = error_code or "internal_error"
-        body["error"] = {
-            "code": code,
-            "message": _SAFE_ERROR_MESSAGES.get(code, _SAFE_ERROR_MESSAGES["internal_error"]),
-        }
-    else:
-        body["error"] = None
-    return body
+        raise TypeError("config must be a RuntimeAPIConfig or a mapping")
+    # Do not eagerly resolve authentication token here; comply with contract
+    return RuntimePrivateAPI(cfg, runtime=runtime)
 
 
-def build_runtime_private_api(
-    config: Union[RuntimeAPIConfig, Mapping[str, Any]],
-    runtime: Optional[Any] = None,
-    token_resolver: Optional[Callable[[str], Optional[str]]] = None,
-) -> RuntimePrivateAPI:
-    # Do not eagerly resolve authentication. Accept empty auth_token_reference.
-    cfg = config if isinstance(config, RuntimeAPIConfig) else RuntimeAPIConfig.from_mapping(config)
-    return RuntimePrivateAPI(cfg, runtime=runtime, token_resolver=token_resolver)
+# Utilities
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Runtime Private API")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
-    parser.add_argument("--port", default="8765", help="Bind port (0 for ephemeral)")
-    parser.add_argument("--data-root", dest="data_root", default=None, help="Data root directory")
-    parser.add_argument("--repository-root", dest="repository_root", default=None, help="Repository root directory")
-    parser.add_argument("--default-project-id", dest="default_project_id", default=None, help="Default project ID")
-    parser.add_argument("--environment-name", dest="environment_name", default=None, help="Environment name")
-    parser.add_argument(
-        "--auth-token-env",
-        dest="auth_token_env",
-        default=None,
-        help="Environment variable name that holds the bearer auth token",
-    )
-    parser.add_argument(
-        "--enable-lifecycle-endpoints",
-        dest="enable_lifecycle_endpoints",
-        action="store_true",
-        help="Enable lifecycle endpoints",
-    )
+def _env_token_resolver(env_var_name: str) -> Optional[str]:
+    # Read environment variable safely; return None if not set or empty
+    val = os.environ.get(env_var_name)
+    if val is None or val == "":
+        return None
+    return val
 
-    args = parser.parse_args(list(argv) if argv is not None else None)
 
-    # Validate host/port early
+def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="runtime_private_api", add_help=True)
+    parser.add_argument("--host", type=str, default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--data-root", type=str, default="")
+    parser.add_argument("--repository-root", type=str, default="")
+    parser.add_argument("--default-project-id", type=str, default="")
+    parser.add_argument("--environment-name", type=str, default="")
+    parser.add_argument("--auth-token-env", type=str, default="")
+    parser.add_argument("--enable-lifecycle-endpoints", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = _parse_args(argv)
+
+    # Validate host
+    host = (args.host or "").strip()
+    if not host or host in ("0.0.0.0", "::"):
+        _safe_stderr("Invalid host; refusing to bind to wildcard public interfaces\n")
+        return 2
+    # Validate port
     try:
         port = int(args.port)
-    except (TypeError, ValueError):
-        print("Invalid --port; must be an integer", file=sys.stderr)
+    except Exception:
+        _safe_stderr("Invalid port\n")
+        return 2
+    if port < 0 or port > 65535:
+        _safe_stderr("Port must be between 0 and 65535\n")
         return 2
 
+    # Build RuntimeService using repository-provided builders; imports are delayed and optional
+    runtime = None
     try:
-        api_cfg = RuntimeAPIConfig.from_mapping(
-            {
-                "host": str(args.host),
-                "port": port,
-                "enable_lifecycle_endpoints": bool(args.enable_lifecycle_endpoints),
-                "auth_token_reference": str(args.auth_token_env or ""),
-            }
+        # Attempt common module path for builders
+        from importlib import import_module
+        runtime_mod = None
+        appcfg_cls = None
+        rtcfg_cls = None
+        build_runtime_fn = None
+        try:
+            runtime_mod = import_module("agent.runtime")
+        except Exception:
+            try:
+                runtime_mod = import_module("runtime")
+            except Exception:
+                runtime_mod = None
+        if runtime_mod is None:
+            _safe_stderr("Runtime modules not found; cannot start runtime service\n")
+            return 2
+        # Fetch expected interfaces; if missing, fail fast and safe
+        appcfg_cls = getattr(runtime_mod, "ApplicationConfig", None)
+        rtcfg_cls = getattr(runtime_mod, "RuntimeConfig", None)
+        build_runtime_fn = getattr(runtime_mod, "build_runtime", None)
+        if appcfg_cls is None or rtcfg_cls is None or build_runtime_fn is None:
+            _safe_stderr("Required runtime interfaces are unavailable\n")
+            return 2
+
+        # Construct configs with only safe/known fields
+        app_cfg = appcfg_cls(  # type: ignore[call-arg]
+            data_root=(args.data_root or None),
+            repository_root=(args.repository_root or None),
+            default_project_id=(args.default_project_id or None),
+            environment_name=(args.environment_name or None),
         )
-    except Exception as exc:
-        print(f"Invalid API configuration: {exc}", file=sys.stderr)
+        rt_cfg = rtcfg_cls()  # type: ignore[call-arg]
+        runtime = build_runtime_fn(app_cfg, rt_cfg)  # type: ignore[misc]
+    except SystemExit:
+        raise
+    except Exception:
+        _safe_stderr("Failed to construct runtime service\n")
         return 2
 
-    # Lazy token resolver: do not access environment until request time. However, define resolver function.
-    def _env_token_resolver(ref: str) -> Optional[str]:
-        try:
-            # Never raise here; return None if missing
-            val = os.environ.get(ref)
-            return val if val else None
-        except Exception:
-            return None
-
-    # Build runtime using existing public interfaces. Import lazily to avoid import errors in environments
-    # where runtime components are unavailable unless main() is invoked.
+    # Start runtime service
     try:
-        # Import within main to prevent import-time failures in test contexts that do not require runtime.
-        from agent.runtime import build_runtime as _build_runtime  # type: ignore
-        from agent.runtime import ApplicationConfig as _ApplicationConfig  # type: ignore
-        from agent.runtime import RuntimeConfig as _RuntimeConfig  # type: ignore
-    except Exception as exc:
-        print(f"Failed to import runtime components: {exc}", file=sys.stderr)
-        return 1
+        if hasattr(runtime, "start"):
+            runtime.start()  # type: ignore[attr-defined]
+    except Exception:
+        _safe_stderr("Failed to start runtime service\n")
+        return 3
 
+    # Build API config with lazy token resolver
+    auth_ref = str(args.auth_token_env or "")
+    api_cfg = RuntimeAPIConfig(
+        host=host,
+        port=port,
+        enable_lifecycle_endpoints=bool(args.enable_lifecycle_endpoints),
+        auth_token_reference=auth_ref,
+        auth_token_resolver=(_env_token_resolver if auth_ref else None),
+    )
+
+    # Build and start API
     try:
-        app_cfg_kwargs: Dict[str, Any] = {}
-        if args.data_root is not None:
-            app_cfg_kwargs["data_root"] = args.data_root
-        if args.repository_root is not None:
-            app_cfg_kwargs["repository_root"] = args.repository_root
-        if args.default_project_id is not None:
-            app_cfg_kwargs["default_project_id"] = args.default_project_id
-        if args.environment_name is not None:
-            app_cfg_kwargs["environment_name"] = args.environment_name
-
-        application_config = _ApplicationConfig(**app_cfg_kwargs)  # type: ignore[arg-type]
-        runtime_config = _RuntimeConfig()  # type: ignore[call-arg]
-        runtime = _build_runtime(application_config, runtime_config)  # type: ignore[misc]
-        # Start runtime service using its public lifecycle method if available
+        api = build_runtime_private_api(api_cfg, runtime=runtime)
+        api.start()
+    except Exception:
+        _safe_stderr("Failed to start private API\n")
         try:
-            runtime.start()
+            if hasattr(runtime, "stop"):
+                runtime.stop()  # type: ignore[attr-defined]
         except Exception:
-            # If start is not required/available, continue
             pass
-    except Exception as exc:
-        print(f"Failed to build or start runtime: {exc}", file=sys.stderr)
-        return 1
+        return 4
 
-    api = build_runtime_private_api(api_cfg, runtime=runtime, token_resolver=_env_token_resolver)
-
-    # Signal handling to stop serving gracefully
+    # Signal handling
     stop_event = threading.Event()
 
     def _handle_signal(signum: int, frame: Any) -> None:  # noqa: ARG001
+        # Trigger API shutdown without deadlocking
         stop_event.set()
+        try:
+            api.stop()
+        except Exception:
+            pass
 
     try:
         signal.signal(signal.SIGINT, _handle_signal)
         signal.signal(signal.SIGTERM, _handle_signal)
     except Exception:
-        # Not all environments allow setting signals; continue without
+        # Some environments may not allow signal handling (e.g., Windows threads)
         pass
 
+    # Serve until stopped by signal
     try:
-        api.start()
-    except Exception as exc:
-        print(f"Failed to start API: {exc}", file=sys.stderr)
-        try:
-            # Ensure runtime is stopped if API fails to start
-            try:
-                runtime.stop()  # type: ignore[attr-defined]
-            except Exception:
-                pass
-        finally:
-            return 1
-
-    # Block until signal
-    try:
-        while not stop_event.is_set():
-            time.sleep(0.2)
+        api.serve_forever()
     except KeyboardInterrupt:
         pass
-    finally:
-        try:
-            api.stop()
-            api.close()
-        except Exception:
-            pass
-        try:
+
+    # Ensure API is stopped and closed
+    try:
+        api.stop()
+    except Exception:
+        pass
+    try:
+        api.close()
+    except Exception:
+        pass
+
+    # Stop runtime
+    try:
+        if hasattr(runtime, "stop"):
             runtime.stop()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+    except Exception:
+        _safe_stderr("Failed to stop runtime service cleanly\n")
+        return 5
 
     return 0
 
 
-if __name__ == "__main__":
+def _safe_stderr(msg: str) -> None:
+    try:
+        import sys
+        sys.stderr.write(msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
