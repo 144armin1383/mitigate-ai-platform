@@ -290,3 +290,19 @@ Concurrency and Locking Contract
 - The unittest test_add_second_project_without_core_changes must complete without blocking.
 - All registry operations must remain deterministic and thread-safe.
 - All existing and newly generated unittest tests must pass.
+
+Nested Registry Lock Prevention Contract
+
+- ProjectRegistry currently uses a non-reentrant threading.Lock.
+- A public method holding self._lock must never call another public method that also acquires self._lock.
+- get_context() must not call the public resolve_project_paths() while holding self._lock.
+- Implement a private lock-free helper such as _resolve_project_paths_unlocked(project_id, profile).
+- resolve_project_paths() may acquire self._lock and then call the private lock-free helper.
+- get_context() may acquire self._lock and call the same private lock-free helper directly.
+- Private helpers called while self._lock is held must never acquire self._lock again.
+- Do not solve this only by changing threading.Lock to threading.RLock.
+- Keep lock ownership explicit and limited to public method boundaries.
+- test_immutable_project_context must complete without blocking.
+- test_two_independent_project_profiles_and_isolation must complete without blocking.
+- Every ProjectRegistry unittest must complete within a bounded timeout.
+- All existing and newly generated unittest tests must pass.
