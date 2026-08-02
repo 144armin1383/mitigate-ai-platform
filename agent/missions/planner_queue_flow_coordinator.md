@@ -232,3 +232,18 @@ Deliverables
 
 - agent/orchestrator/planner_queue_flow_coordinator.py
 - agent/tests/test_planner_queue_flow_coordinator.py
+
+Queue Resolution Failure Boundary Contract
+
+- validate_approved_request() must validate only the approved request schema and project-context structure.
+- A syntactically valid queue_reference must not be rejected merely because the actual queue cannot later be resolved.
+- Queue availability and queue existence are runtime dependency concerns, not approved-request schema concerns.
+- Missing, malformed, or cross-project queue_reference values may produce invalid_approved_request.
+- A valid queue_reference whose resolver later fails must produce queue_resolution_failed.
+- QueueEnqueueCoordinator failure code queue_resolution_failed must be propagated unchanged.
+- Do not convert queue_resolution_failed into invalid_approved_request.
+- Planner and mission-building steps may complete before queue resolution is attempted.
+- Queue resolution failure must not be reported as invalid_plan.
+- Queue resolution failure must not be reported as dependency_failed when the dependency already returned the documented queue_resolution_failed result.
+- The test_queue_resolution_failure unittest must return blocked_reason="queue_resolution_failed".
+- All existing and newly generated unittest tests must pass.
