@@ -195,3 +195,24 @@ Deliverables
 - agent/providers/provider_usage_ledger.py
 - agent/providers/provider_usage.example.json
 - agent/tests/test_provider_usage_ledger.py
+
+Provider Usage Ledger Locking and Timestamp Contract
+
+- record_usage() may acquire the ledger storage lock exactly once.
+- Public methods may acquire the ledger lock.
+- Internal helper methods must assume the caller already owns the lock.
+- Nested locking is forbidden.
+- Nested file locking is forbidden.
+- Usage persistence and event persistence must use separate critical sections.
+- Event logging must occur only after the usage storage lock has been released.
+- _emit_event() must never acquire the active usage storage lock.
+- Duplicate usage detection and persistence must remain atomic.
+- File locks must always be released before writing structured events.
+- Usage recording must always terminate in bounded time.
+- Lock-related unittest tests must never hang.
+
+- completed_at must not be earlier than started_at.
+- Production validation must reject invalid timestamp ordering.
+- Normal unittest fixtures must always use chronologically valid timestamps.
+- Only the dedicated invalid-timestamp test may intentionally violate timestamp ordering.
+- All existing and newly generated unittest tests must pass.
