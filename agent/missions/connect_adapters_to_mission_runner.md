@@ -145,3 +145,15 @@ Python Syntax Acceptance Criteria
 - Prefer contextlib.ExitStack when several mock.patch context managers are required.
 - Generated unittest code must be syntactically valid on Python 3.12.
 - All existing and newly generated unittest tests must pass.
+
+Final Integration Acceptance Criteria
+
+- PatchAdapter must be constructed with the active resolved repository root.
+- MissionRunner(repo_root=...) must pass the same repository root to ValidationAdapter, PatchAdapter, and GitReviewAdapter.
+- GitReviewAdapter.review must always run after successful validation and before commit or push.
+- A successful mission must not bypass Git review.
+- Dependency-injected adapters must be used exactly as provided.
+- Do not replace or recreate injected adapters.
+- Git review approve may continue to commit and push.
+- Git review manual_review, high, critical, or reject must stop before commit and push.
+- All existing and newly generated unittest tests must pass.
