@@ -2,7 +2,7 @@ Mission: Connect Engine Adapters to Mission Runner
 
 Goal
 
-Integrate the existing Engine Adapter Layer into the existing Mission Runner with minimal, controlled changes.
+Integrate the existing Engine Adapter Layer into the existing Mission Runner with the smallest possible changes.
 
 Existing Components
 
@@ -15,106 +15,113 @@ Existing Components
 - agent/ai/code_generator.py
 - agent/ai/prompt_builder.py
 
-Core Requirement
+Core Requirements
 
-Do not rewrite Mission Runner.
+- Do not rewrite Mission Runner.
+- Modify only the minimum code necessary.
+- Preserve all existing behaviour.
+- Preserve backwards compatibility.
 
-Modify only the smallest necessary sections so Mission Runner uses the existing adapters through dependency injection and preserves all current behavior.
+Adapter Integration
 
-Integration Requirements
+- Use RetryAdapter.
+- Use ValidationAdapter.
+- Use PatchAdapter.
+- Use GitReviewAdapter.
 
-- Import and use RetryAdapter
-- Import and use ValidationAdapter
-- Import and use PatchAdapter
-- Import and use GitReviewAdapter
-- Do not instantiate RetryEngine, ValidationEngine, PatchEngine, or GitReviewEngine directly inside Mission Runner
-- Preserve all existing mission loading, branch creation, generation, allowlist validation, file writing, test execution, commit, and push behavior
-- Preserve existing public functions and command-line behavior
-- Preserve existing one-attempt mission behavior
-- Do not automatically merge into main
-- Do not change mission file format
-- Do not add new dependencies
-- Do not modify requirements.txt
-- Python 3.12 compatible
-- Fully typed Python
-- English source code and comments only
-- Use Python standard library unittest only
+Construction Rules
 
-Retry Integration
+- ValidationAdapter must receive the active repository root.
+- MissionRunner(repo_root=...) must pass the resolved repository root into ValidationAdapter.
+- Do not instantiate ValidationEngine directly.
+- Do not instantiate PatchEngine directly.
+- Do not instantiate GitReviewEngine directly.
+- Do not instantiate RetryEngine directly.
 
-- Use RetryAdapter for retry decisions and corrective feedback
-- Default maximum attempts must be 3
-- Support --max-attempts with a valid range from 1 to 5
-- Retry only retryable generation, parsing, compilation, validation, and unittest failures
-- Stop immediately on blocked or non-retryable failures
-- Preserve the original mission text and deliverable allowlist on every attempt
-- Never expose secrets or unbounded logs in retry feedback
+CLI Requirements
 
-Validation Integration
+- Preserve all existing CLI behaviour.
+- Support:
 
-- Use ValidationAdapter for generated-file and test validation
-- Validation failure must prevent commit and push
-- Structured validation errors must be passed safely to RetryAdapter
-- Never bypass validation
+python -m ai.mission_runner mission_name
 
-Patch Integration
+and
 
-- Use PatchAdapter only where unified diff application is required
-- Preserve dry-run, path protection, atomic update, backup, and rollback behavior
-- Never allow paths outside the repository
-- Never modify unrelated files
+python -m ai.mission_runner mission_name --max-attempts 3
 
-Git Review Integration
+- --max-attempts must accept only values from 1 through 5.
+- Invalid values must be handled using argparse parser errors.
+- Invalid values must raise SystemExit.
+- Never propagate ValueError directly from CLI parsing.
 
-- Use GitReviewAdapter before commit and push
-- High-risk and critical findings must prevent automatic commit and push
-- A manual_review or reject recommendation must stop the mission safely
-- Low-risk approve results may proceed
-- Never modify Git state through the review adapter
+Retry Behaviour
 
-Compatibility Requirements
+- Retry only retryable failures.
+- Never retry security violations.
+- Never retry provider authentication failures.
+- Never retry provider billing failures.
+- Preserve original mission text.
+- Preserve deliverable allowlist.
+- Preserve cleanup behaviour.
 
-- Keep python -m ai.mission_runner mission_name working
-- Add support for python -m ai.mission_runner mission_name --max-attempts 3
-- Existing successful missions must continue to work
-- Existing tests must remain unchanged unless a narrowly scoped compatibility update is necessary
-- Do not remove existing safety checks
-- Do not weaken forbidden-content checks
-- Do not weaken path allowlisting
-- Do not use git reset, git clean, checkout, restore, or automatic merge operations
+Validation Behaviour
 
-Failure Cleanup
+- ValidationAdapter performs validation.
+- Validation failure blocks commit.
+- Validation failure blocks push.
 
-- Failed attempts must restore any pre-existing deliverable content and permissions
-- New deliverables from failed attempts must be removed
-- Unrelated files must remain untouched
-- Final failure must leave the working tree clean
-- All cleanup must operate only on the exact deliverable allowlist
+Git Review Behaviour
 
-Testing Requirements
+- GitReviewAdapter runs before commit.
+- High risk blocks commit.
+- Critical risk blocks commit.
+- Approve allows completion.
 
-- Test adapter construction and dependency injection
-- Test success on first attempt
-- Test success after one retry
-- Test invalid JSON retry
-- Test compilation failure retry
-- Test validation failure retry
-- Test unittest failure retry
-- Test security failure stops immediately
-- Test provider authentication and billing failures stop immediately
-- Test Git Review high-risk result blocks commit
-- Test Git Review critical result blocks commit
-- Test Git Review approve result allows completion
-- Test cleanup of new deliverables
-- Test restoration of pre-existing deliverables
-- Test unrelated files remain unchanged
-- Test default max attempts equals 3
-- Test command-line limits from 1 through 5
-- Test final failure leaves the repository clean
-- Test existing mission behavior remains compatible
-- All existing and newly generated unittest tests must pass
+Security
+
+- Never weaken forbidden-content validation.
+- Never weaken allowlist validation.
+- Never allow paths outside repository.
+- Never use git reset.
+- Never use git clean.
+- Never use git checkout.
+- Never use git restore.
+- Never auto merge into main.
+
+Compatibility
+
+- Existing successful missions must continue working.
+- Existing tests must remain compatible.
 
 Deliverables
 
 agent/ai/mission_runner.py
+
 agent/tests/test_mission_runner_adapters.py
+
+Testing
+
+- Adapter construction
+- Dependency injection
+- ValidationAdapter receives repo_root
+- Retry success
+- Retry after compilation failure
+- Retry after unittest failure
+- Retry after validation failure
+- Security failure stops immediately
+- Provider authentication stops immediately
+- Git review blocks commit
+- Git review approve completes mission
+- Existing behaviour preserved
+- Existing tests preserved
+- CLI parsing
+- Invalid --max-attempts raises SystemExit
+- All tests pass
+
+Acceptance Criteria
+
+- ValidationAdapter is constructed using repo_root.
+- argparse validates max-attempts.
+- No ValueError escapes from CLI parsing.
+- All existing and generated unittest tests pass.
+- Working tree remains clean after failures.
