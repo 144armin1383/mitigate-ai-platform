@@ -127,3 +127,17 @@ Deliverables
 
 - agent/ai/mission_runner.py
 - agent/tests/test_mission_runner_adapters.py
+
+Final Cleanup and Restoration Acceptance Criteria
+
+- Before the first generation attempt, snapshot every pre-existing deliverable listed in the exact allowlist.
+- Snapshot the original file bytes and file permissions before any modification occurs.
+- If validation, testing, review, generation, or retry ultimately fails, restore every pre-existing deliverable to its original bytes and permissions.
+- Before each retry, restore pre-existing deliverables to their original state before starting the next attempt.
+- New deliverables created during a failed attempt must be removed before retrying or returning failure.
+- Restoration must occur even when failure happens after successful file writing.
+- Cleanup must run in a finally-safe path and must not depend on the failure category.
+- Unrelated files must never be changed.
+- A failed mission must leave the working tree exactly as it was before the mission branch was created.
+- The cleanup_and_restoration unittest must pass.
+- All existing and newly generated unittest tests must pass.
