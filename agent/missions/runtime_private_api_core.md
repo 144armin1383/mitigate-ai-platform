@@ -317,3 +317,15 @@ Authentication Construction Contract
 - Missing or unresolved authentication configuration must produce HTTP authentication responses during request handling rather than constructor exceptions whenever possible.
 - Constructor validation must not reject configurations used by the unauthenticated health-live endpoint tests.
 
+
+Authentication Construction Contract
+
+- build_runtime_private_api() must not eagerly resolve the authentication token.
+- Construction must succeed even when auth_token_reference is empty.
+- GET /health/live must work without authentication configuration.
+- auth_token_reference becomes mandatory only when a protected endpoint is accessed or authentication is actually required.
+- The token resolver must be invoked lazily.
+- A resolver returning a valid token must not cause construction failure.
+- Missing or unresolved authentication configuration must produce HTTP authentication responses during request handling rather than constructor exceptions whenever possible.
+- Constructor validation must not reject configurations used by the unauthenticated health-live endpoint tests.
+
