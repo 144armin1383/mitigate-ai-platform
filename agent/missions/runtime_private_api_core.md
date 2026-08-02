@@ -394,3 +394,19 @@ Threading and Locking
 - All request handlers must terminate within bounded test timeouts.
 - All Runtime Private API tests must complete without TimeoutError or deadlock.
 - All existing and newly generated unittest tests must pass.
+
+### Additional implementation requirements
+
+RuntimePrivateAPI.start() MUST start the HTTP server in a dedicated daemon thread.
+
+Calling start() MUST return immediately after the server is accepting requests.
+
+Clients MUST be able to perform HTTP requests immediately after start() returns.
+
+Callers MUST NOT be required to invoke serve_forever() for normal API operation.
+
+serve_forever() is only an internal implementation detail.
+
+stop() MUST gracefully shutdown the HTTP server, join the server thread, and release the listening socket before returning.
+
+The implementation MUST NOT require tests to call serve_forever().
