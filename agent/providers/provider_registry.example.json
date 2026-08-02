@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "provider_id": "openai",
+      "display_name": "OpenAI",
+      "enabled": false,
+      "credential_reference": "OPENAI_API_KEY_REF",
+      "base_url_reference": null,
+      "organization_reference": null,
+      "project_reference": null,
+      "default_timeout_seconds": 60,
+      "maximum_retries": 2,
+      "created_at": "2024-01-01T00:00:00+00:00",
+      "updated_at": "2024-01-01T00:00:00+00:00",
+      "status": "disabled"
+    }
+  ],
+  "models": [
+    {
+      "model_id": "gpt-4o-mini",
+      "provider_id": "openai",
+      "display_name": "GPT-4o Mini",
+      "enabled": false,
+      "capabilities": ["chat", "summarization"],
+      "context_window": 128000,
+      "maximum_output_tokens": 4096,
+      "supports_text": true,
+      "supports_vision": true,
+      "supports_tools": true,
+      "supports_json": true,
+      "supports_reasoning": false,
+      "supports_streaming": true,
+      "input_cost_reference": null,
+      "output_cost_reference": null,
+      "created_at": "2024-01-01T00:00:00+00:00",
+      "updated_at": "2024-01-01T00:00:00+00:00",
+      "status": "disabled"
+    }
+  ],
+  "assignments": [],
+  "events": []
+}
