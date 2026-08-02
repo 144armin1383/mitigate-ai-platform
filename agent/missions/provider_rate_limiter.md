@@ -181,3 +181,20 @@ Duplicate Request and Atomic Registration Contract
 - Duplicate detection must occur before available-capacity evaluation.
 - The test_atomic_check_and_register unittest must produce exactly one true result.
 - All existing and newly generated unittest tests must pass.
+
+Configuration Removal and State Preservation Contract
+
+- remove_limit(project_id) must remove only the active rate-limit configuration.
+- Removing a configuration must not delete the project's persistent state file.
+- The per-project state path projects/<project_id>/state.json must continue to exist after configuration removal.
+- After removal, state.json must contain valid deterministic JSON representing an unconfigured or disabled rate-limiter state.
+- Existing request-window history may be cleared when the configuration is removed.
+- Configuration removal must not delete the project directory.
+- Configuration removal must not delete event history.
+- get_limit(project_id) after removal must return the documented missing-configuration result.
+- check_request() and check_and_register() after removal must follow unrestricted missing-configuration behavior.
+- remove_limit() must remain atomic.
+- Repeated removal of an already missing configuration must follow one deterministic documented behavior.
+- Restart recovery after configuration removal must preserve the unconfigured state.
+- The test_configuration_removal unittest must verify that projects/projA/state.json still exists.
+- All existing and newly generated unittest tests must pass.
