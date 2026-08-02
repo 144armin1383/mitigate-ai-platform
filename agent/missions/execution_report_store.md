@@ -291,3 +291,14 @@ Deliverables
 
 - agent/execution/execution_report_store.py
 - agent/tests/test_execution_report_store.py
+
+Generated File Safety Contract
+
+- Generated production and test files must not contain the substring "eval(" anywhere.
+- Do not call Python eval().
+- Do not include "eval(" in comments, docstrings, strings, test names, helper names, or assertions.
+- Use explicit validation functions, dictionary access, normal conditionals, dataclasses, and unittest assertions.
+- Do not use exec(), compile(), __import__(), dynamic imports, subprocess, os.system, shell=True, or shell execution.
+- Do not dynamically execute metadata, summaries, paths, filters, or stored JSON values.
+- Every generated deliverable must pass Mission Runner forbidden-content validation before py_compile and unittest discovery.
+- All existing and newly generated unittest tests must pass.
