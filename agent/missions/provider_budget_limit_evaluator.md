@@ -156,3 +156,16 @@ Generated Test Safety Contract
 - Test names should use words such as evaluation, decision, ordering, or result without forming the forbidden substring.
 - Every generated deliverable must pass Mission Runner forbidden-content validation before py_compile and unittest execution.
 - All existing and newly generated unittest tests must pass.
+
+Soft Warning Non-Blocking Contract
+
+- A soft warning threshold must never block a request by itself.
+- When projected usage reaches or exceeds soft_warning_percent but remains within the configured hard limit:
+  - allowed must be true.
+  - warning must be true.
+  - blocked_reason must be null.
+- A request may be blocked only when an actual configured hard limit is exceeded or an explicit block policy applies.
+- Soft warning evaluation must occur only after all hard-limit checks pass.
+- Reaching the warning threshold is not equivalent to exceeding the hard limit.
+- The test_soft_warning_behavior unittest must verify allowed=true and warning=true.
+- All existing and newly generated unittest tests must pass.
