@@ -101,8 +101,9 @@ def extract_deliverables(mission: str) -> set[str]:
 
     for raw_line in mission.splitlines():
         line = raw_line.strip()
+        normalized = line.lstrip("#").strip().lower()
 
-        if line.lower() == "deliverables":
+        if normalized == "deliverables":
             in_deliverables = True
             continue
 
