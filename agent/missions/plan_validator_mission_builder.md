@@ -180,3 +180,31 @@ Deliverables
 
 - agent/orchestrator/plan_validator_mission_builder.py
 - agent/tests/test_plan_validator_mission_builder.py
+
+Deterministic Dependency and Redaction Contract
+
+Dependency Conversion
+
+- Generate the complete step_id to mission_id mapping before converting any dependencies.
+- Convert each step dependency to its corresponding mission_id.
+- Converted dependency lists must be deterministic.
+- After conversion, sort dependency mission identifiers lexicographically.
+- Dependency ordering must not depend on input dictionary order, set iteration, hash order, or mission-generation timing.
+- For step dependencies that convert to m1 and m2, the resulting list must be ["m1", "m2"].
+- For injected mission identifiers X1 and X2, the resulting list must be ["X1", "X2"].
+- Sorting dependencies must not change dependency meaning.
+- Topological mission ordering and per-mission dependency-list ordering are separate requirements.
+- The test_valid_plan_acceptance and test_deterministic_dependency_conversion unittests must pass.
+
+Sensitive Payload Redaction
+
+- Sensitive payload keys must be preserved in the sanitized payload with the value "[redacted]".
+- Do not silently remove sensitive keys.
+- At minimum, redact keys named password, passwd, secret, token, api_key, api-key, authorization, bearer, credential, and private_key.
+- Sensitive-key matching must be case-insensitive.
+- Nested dictionaries and lists must be sanitized recursively.
+- The original input payload must not be mutated.
+- Non-sensitive payload fields must remain unchanged.
+- Redacted payloads must remain JSON-safe and deterministic.
+- The test_result_redaction unittest must find payload["password"] equal to "[redacted]".
+- All existing and newly generated unittest tests must pass.
