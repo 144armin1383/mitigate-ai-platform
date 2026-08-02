@@ -39,3 +39,15 @@ agent/tests/test_ai_planner.py
 - JSON output is deterministic.
 - Existing tests continue to pass.
 - New planner tests pass.
+
+Mandatory Testing Policy
+
+- Use Python standard library unittest only.
+- Never import or use pytest.
+- Never use pytest fixtures, decorators, raises, monkeypatch, parametrize, or tmp_path.
+- Never add pytest or any new test dependency.
+- Never modify requirements.txt.
+- Generated tests must be compatible with unittest discovery.
+- The literal statement import pytest must never appear in generated files.
+- Every generated Python file must pass py_compile.
+- All existing and newly generated unittest tests must pass.
