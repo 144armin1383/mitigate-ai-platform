@@ -54,3 +54,16 @@ Deliverables
 
 - agent/runtime/mission_queue.py
 - agent/tests/test_mission_queue.py
+
+Circular Dependency Acceptance Criteria
+
+- The queue must validate the entire dependency graph whenever a mission is added, updated, resumed, or loaded from persistence.
+- Circular dependencies must be rejected immediately with ValueError.
+- Detect direct self-dependencies.
+- Detect two-node cycles such as A depends on B and B depends on A.
+- Detect longer cycles such as A -> B -> C -> A.
+- Cycle detection must use deterministic graph traversal.
+- Dependency validation must not depend on mission execution state.
+- Persisted queue data containing a cycle must be rejected during load.
+- The test_circular_dependency_rejection unittest must pass.
+- All existing and newly generated unittest tests must pass.
