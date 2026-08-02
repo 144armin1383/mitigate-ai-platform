@@ -31,3 +31,12 @@ Deliverables
 
 agent/validators/validation_engine.py
 agent/tests/test_validation_engine.py
+
+Additional Acceptance Criteria
+
+- Unittest execution results must correctly report total, passed, failed, and error counts.
+- Parse unittest result counts reliably from the unittest result object, not by fragile text matching.
+- Successful test runs with one discovered test must report total=1, passed=1, failed=0, errors=0.
+- Failed test runs with one discovered failing test must report total=1 and the correct failed or error count.
+- Validation reports must remain structured and deterministic.
+- All existing and newly generated unittest tests must pass.
