@@ -299,3 +299,42 @@ Dependency Override Propagation Contract
 - Container attributes and downstream dependency attributes must reference the exact supplied override object.
 - The single-override and multiple-override tests must pass.
 - All existing and newly generated unittest tests must pass.
+
+Path Scope and Symlink Validation Contract
+
+Path Categories
+
+- data_root is an independent absolute root.
+- repository_root is an independent absolute root and is not required to be inside data_root.
+- provider_registry_path, project_registry_path, usage_ledger_path, budget_store_path, rate_limiter_path, execution_report_path, queue_root, and event_root are data-root-scoped paths.
+- Data-root-scoped relative paths must resolve underneath data_root.
+- Absolute data-root-scoped paths are allowed only when they remain underneath data_root.
+- Do not apply the data_root containment rule to repository_root.
+
+Non-Existing Path Handling
+
+- Valid configured paths may not exist yet during application construction.
+- Symlink-escape validation must support non-existing final paths.
+- Resolve and inspect the nearest existing ancestor.
+- Reject the path only when an existing ancestor or existing path escapes its permitted root through a symbolic link.
+- Do not reject a safe missing child path merely because it does not exist.
+- Do not require registry, ledger, budget, queue, event, or report files to exist during configuration validation.
+
+Containment Rules
+
+- Normalize paths without requiring existence.
+- Reject explicit parent traversal before joining.
+- After normalization, verify data-root-scoped paths remain descendants of normalized data_root.
+- Use a path-aware descendant check rather than string-prefix comparison.
+- A sibling path with a common textual prefix must not be accepted.
+- repository_root must be validated independently for traversal, control characters, and existing symlink escape.
+- A valid temporary repository_root outside data_root must pass validation.
+
+Expected Behavior
+
+- test_valid_configuration must pass.
+- Valid non-existing paths under data_root must pass.
+- Valid repository_root outside data_root must pass.
+- Parent traversal must still fail with unsafe_path.
+- Existing symbolic-link escapes must still fail with unsafe_path.
+- All existing and newly generated unittest tests must pass.
