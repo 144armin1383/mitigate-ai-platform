@@ -281,3 +281,31 @@ Deliverables
 
 - agent/orchestrator/planner_queue_orchestrator.py
 - agent/tests/test_planner_queue_orchestrator.py
+
+Non-Atomic Queue and Deterministic Ordering Contract
+
+- A queue that lacks batch enqueue support must still be fully supported.
+- Absence of batch enqueue must not produce invalid_plan or queue_failed.
+- Before the first individual enqueue, validate the entire approved request, plan, and complete generated mission set.
+- Generate all mission identifiers before any enqueue begins.
+- Convert every step dependency to its corresponding generated mission_id before any enqueue begins.
+- Validate all converted mission dependencies before the first enqueue.
+- If any validation fails, enqueue nothing.
+
+- Non-atomic enqueue order must be a deterministic topological order.
+- A mission may be enqueued only after every dependency has already appeared earlier in the deterministic order.
+- Among currently dependency-ready missions, use priority as the first stable tie-breaker.
+- Use step_id as the second stable tie-breaker.
+- The priority direction used by implementation and tests must be consistent and documented.
+- Independent missions with equal priority must be ordered lexicographically by step_id.
+- Mission IDs in the returned result must exactly match the actual enqueue order.
+
+- Support common non-atomic queue interfaces exposed by injected fakes and production adapters.
+- Use the documented single-mission enqueue method when batch enqueue is unavailable.
+- Do not require optional batch-only methods from a non-atomic queue.
+- Do not reject a queue merely because it lacks enqueue_many, batch_enqueue, or similar optional methods.
+- Successful individual enqueue of every validated mission must return accepted=true.
+- queue_failed must be returned only when queue resolution fails or an actual enqueue operation fails.
+- The test_success_non_atomic_queue_flow unittest must return accepted=true.
+- The test_deterministic_topological_ordering_and_tie_break unittest must return accepted=true.
+- All existing and newly generated unittest tests must pass.
