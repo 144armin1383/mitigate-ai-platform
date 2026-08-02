@@ -338,3 +338,14 @@ Expected Behavior
 - Parent traversal must still fail with unsafe_path.
 - Existing symbolic-link escapes must still fail with unsafe_path.
 - All existing and newly generated unittest tests must pass.
+
+Construction Failure Test Helper Contract
+
+- Tests must not attach attributes to a plain object() instance.
+- Plain object() instances do not provide a writable __dict__.
+- Use types.SimpleNamespace or a trivial custom mutable class for failure markers.
+- Construction-failure tests may set attributes such as _fail_at only on mutable helper objects.
+- Do not use setattr(object(), ...).
+- Failure simulation must remain deterministic.
+- Construction cleanup must still occur in reverse construction order.
+- All existing and newly generated unittest tests must pass.
