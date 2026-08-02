@@ -272,3 +272,21 @@ Project Identifier and Timestamp Contract
 - created_at must remain unchanged after project updates.
 - The test_project_update unittest must pass.
 - All existing and newly generated unittest tests must pass.
+
+Concurrency and Locking Contract
+
+- ProjectRegistry must never acquire the same non-reentrant lock twice from the same call chain.
+- Public methods may acquire the registry lock.
+- Internal helper methods must assume the caller already owns the lock.
+- Nested locking is forbidden.
+- No persistence operation may call another public API while holding the registry lock.
+- Listing, creating, updating, deleting and loading projects must always terminate.
+- Every public registry operation must complete in bounded time.
+- Adding a second independent project must never block.
+- Atomic persistence must not hold the registry lock while waiting for filesystem operations that may re-enter registry code.
+- Use threading.RLock only when re-entrant locking is genuinely required.
+- Prefer one lock acquisition at the public-method boundary and lock-free private helpers.
+- Tests involving registry operations must include bounded timeouts so a deadlock fails instead of hanging indefinitely.
+- The unittest test_add_second_project_without_core_changes must complete without blocking.
+- All registry operations must remain deterministic and thread-safe.
+- All existing and newly generated unittest tests must pass.
