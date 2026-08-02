@@ -130,3 +130,16 @@ Python Package Import Contract
 - If compatibility with python -m runtime.background_worker is required from inside agent/, implement explicit import fallbacks in production code, not test-only path hacks.
 - All generated imports must match the existing package layout.
 - All existing and newly generated unittest tests must pass.
+
+Constructor Contract
+
+- BackgroundWorker.__init__ must expose exactly one public constructor.
+- The constructor must not accept duplicate keyword arguments.
+- Parameters once, worker_id, poll_interval and max_idle_cycles must each appear only once.
+- Do not wrap BackgroundWorker inside another constructor that forwards duplicated kwargs.
+- The constructor must remain directly instantiable from unittest.
+- The generated unittest helper may pass keyword overrides using **kwargs.
+- BackgroundWorker.__init__ must therefore accept overridden keyword arguments without producing "multiple values for keyword argument" TypeError.
+- Constructor compatibility must be verified by unittest.
+- All existing and newly generated unittest tests must pass.
+
