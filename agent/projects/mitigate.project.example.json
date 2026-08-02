@@ -1,0 +1,28 @@
+{
+  "project_id": "mitigate",
+  "display_name": "Mitigate Platform",
+  "repository_root": "/path/to/mitigate/repository",
+  "default_branch": "main",
+  "project_type": "wordpress",
+  "mission_queue_path": "queue",
+  "conversations_path": "conversations",
+  "uploads_metadata_path": "uploads/metadata.json",
+  "uploads_directory": "uploads/files",
+  "events_path": "events",
+  "reports_path": "reports",
+  "worker_heartbeat_path": "worker/heartbeat",
+  "deployment_target": "production",
+  "allowed_domains": [
+    "example.com",
+    "www.example.com"
+  ],
+  "enabled_providers": [
+    "openai:chat",
+    "anthropic:messages",
+    "local:tools"
+  ],
+  "policy_profile": "default",
+  "created_at": "2024-01-01T00:00:00.000000Z",
+  "updated_at": "2024-01-01T00:00:00.000000Z",
+  "status": "active"
+}
