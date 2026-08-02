@@ -216,3 +216,39 @@ Provider Usage Ledger Locking and Timestamp Contract
 - Normal unittest fixtures must always use chronologically valid timestamps.
 - Only the dedicated invalid-timestamp test may intentionally violate timestamp ordering.
 - All existing and newly generated unittest tests must pass.
+
+Provider Usage Ledger Identity, Validation, and Summary Contract
+
+Duplicate Usage Identity
+
+- usage_id is the unique immutable identifier of a usage record.
+- record_usage() must reject any usage_id that already exists.
+- Duplicate detection and persistence must occur within one atomic critical section.
+- A duplicate attempt must raise a dedicated exception derived from Exception.
+- A duplicate attempt must not overwrite or append another record.
+- Persisted state must remain unchanged after duplicate rejection.
+
+Provider and Model Validation
+
+- Provider and model validation must use the injected model resolver only when one is configured.
+- Unknown providers or models must raise a dedicated safe ledger validation exception.
+- Raw resolver exceptions must be converted into safe ledger validation exceptions.
+- Validation failures must not partially persist usage records.
+- Normal unittest fixtures must use provider and model identifiers accepted by the fake resolver.
+- Dedicated invalid-provider and invalid-model tests must explicitly assert that validation raises an exception.
+
+Range Summary and Unknown Cost
+
+- range_summary() must include every matching usage record.
+- Records with a known estimated_cost and currency must contribute to that currency bucket.
+- Records with estimated_cost=null must increment unknown_cost_count.
+- Unknown-cost records must never be omitted or converted to zero.
+- If a range contains both known and unknown costs, known currency totals and unknown_cost_count must both be preserved.
+- Date-range filtering must use UTC and the inclusive range behavior expected by unittest fixtures.
+- Summary ordering must remain deterministic.
+- Empty ranges must return deterministic zero-count output.
+
+Testing Consistency
+
+- Generated implementation and tests must follow the same duplicate, validation, UTC range, currency, and unknown-cost contracts.
+- All existing and newly generated unittest tests must pass.
