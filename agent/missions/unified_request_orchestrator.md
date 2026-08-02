@@ -302,3 +302,22 @@ Deliverables
 
 - agent/orchestrator/request_orchestrator.py
 - agent/tests/test_request_orchestrator.py
+
+Non-Atomic Queue Compatibility Contract
+
+- The orchestrator must support queues that do not provide an atomic batch-enqueue method.
+- Absence of batch enqueue support must not by itself reject an otherwise valid request.
+- Before the first non-atomic enqueue operation, validate the complete plan and every generated mission.
+- Validate all mission identifiers, project identifiers, plan identifiers, dependencies, payloads, priorities, task types, provider identifiers, and model identifiers before enqueue begins.
+- If any mission fails validation, enqueue nothing.
+- When all missions are valid, enqueue them individually in deterministic dependency-safe order.
+- Deterministic ordering must use topological dependency order with a stable tie-breaker based on priority and step identifier.
+- Independent missions with equal priority must use step_id as the deterministic tie-breaker.
+- Every non-atomic enqueue call must use the selected project's queue.
+- Successful individual enqueue of all validated missions must return accepted=true.
+- mission_ids in the result must use the exact deterministic enqueue order.
+- Missing atomic batch support must not produce queue_failed.
+- queue_failed is appropriate only when an actual enqueue operation raises or returns a documented failure.
+- A failure during individual enqueue must return a safe queue_failed result and must accurately report that orchestration did not complete.
+- The test_deterministic_enqueue_ordering_non_atomic unittest must return accepted=true.
+- All existing and newly generated unittest tests must pass.
