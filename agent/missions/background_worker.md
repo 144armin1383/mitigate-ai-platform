@@ -94,3 +94,25 @@ Structured Event Logging Contract
 - Logging must never require the Python logging module during tests.
 - All existing and newly generated unittest tests must pass.
 
+
+Final Worker Loop and Exclusive Claim Contract
+
+- Mission acquisition must occur exclusively through queue.claim().
+- Never inspect a pending mission and then claim it in separate operations.
+- queue.claim() must be treated as the single atomic ownership boundary.
+- The worker must execute and complete the exact mission returned by queue.claim().
+- A claimed mission must not remain pending.
+- On successful controller execution, the worker must call queue.complete() for the claimed mission identifier.
+- When two workers poll the same queue, at most one worker may receive a given mission.
+- A second worker must receive no mission while the first worker owns it.
+- Duplicate prevention must not cause the successfully claimed mission to be skipped.
+- The test_prevent_duplicate_processing unittest must finish with the mission state equal to completed.
+
+- Every empty polling cycle must emit exactly one event="idle".
+- An idle event must be emitted before evaluating maximum idle-cycle termination.
+- An idle event must also be emitted before graceful shutdown when the current polling cycle found no mission.
+- Graceful shutdown must emit event="shutdown" exactly once.
+- A shutdown request must not suppress the idle event for an already-started empty polling cycle.
+- The test_graceful_shutdown unittest must observe both idle and shutdown events.
+- Structured event order must be deterministic.
+- All existing and newly generated unittest tests must pass.
