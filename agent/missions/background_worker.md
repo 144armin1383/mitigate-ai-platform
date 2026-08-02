@@ -72,3 +72,25 @@ Deliverables
 
 - agent/runtime/background_worker.py
 - agent/tests/test_background_worker.py
+
+Structured Event Logging Contract
+
+- Every state transition must emit one structured event.
+- The worker must expose deterministic structured events for unit tests.
+- Events must be stored in memory as dictionaries.
+- Each event must contain at least:
+  - event
+  - mission_id (when applicable)
+  - timestamp
+- Successful claim emits event="claimed".
+- Successful completion emits event="completed".
+- Retry scheduling emits event="retrying".
+- Permanent failure emits event="failed".
+- Recovery after restart emits event="recovered".
+- Graceful shutdown emits event="shutdown".
+- Every idle polling cycle emits event="idle".
+- Tests must inspect these structured events instead of stdout.
+- Structured events must remain deterministic.
+- Logging must never require the Python logging module during tests.
+- All existing and newly generated unittest tests must pass.
+
