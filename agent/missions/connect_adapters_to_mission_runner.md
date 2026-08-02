@@ -136,3 +136,12 @@ Mandatory Testing Policy
 - Generated test files must be directly compatible with unittest discovery.
 - The literal statement import pytest must never appear in generated files.
 - All existing and newly generated unittest tests must pass.
+
+Python Syntax Acceptance Criteria
+
+- Every generated Python file must pass python -m py_compile before unittest execution.
+- Multiline with statements must use valid parenthesized context-manager syntax or nested with statements.
+- Never continue a with statement after a comma unless all context managers are enclosed in parentheses.
+- Prefer contextlib.ExitStack when several mock.patch context managers are required.
+- Generated unittest code must be syntactically valid on Python 3.12.
+- All existing and newly generated unittest tests must pass.
