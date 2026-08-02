@@ -188,3 +188,18 @@ Deliverables
 
 - agent/orchestrator/request_gate_selector.py
 - agent/tests/test_request_gate_selector.py
+
+Vision Capability Enforcement Contract
+
+- Any request with one or more upload_ids must be treated as requiring vision capability unless the upload metadata explicitly identifies every upload as non-visual text-only content.
+- For the current mission and tests, any non-empty upload_ids list requires a model with supports_vision=true.
+- Explicitly requested models must be rejected when upload_ids is non-empty and the model does not support vision.
+- Automatically selected models must also support vision when upload_ids is non-empty.
+- A non-vision model must never be accepted merely because the task type is chat or another general task.
+- When no compatible vision model is available:
+  - accepted must be false.
+  - blocked_reason must be no_model_available or vision_not_supported.
+  - budget and rate-limit checks must not run.
+- Vision capability validation must occur immediately after model selection and before budget or rate-limit processing.
+- The test_vision_capability_enforcement unittest must return accepted=false.
+- All existing and newly generated unittest tests must pass.
