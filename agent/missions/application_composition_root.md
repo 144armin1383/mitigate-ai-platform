@@ -276,3 +276,26 @@ Deliverables
 
 - agent/app/application.py
 - agent/tests/test_application_composition_root.py
+
+ApplicationConfig Compatibility Contract
+
+- ApplicationConfig must support vars(config).
+- Do not define ApplicationConfig with slots=True.
+- ApplicationConfig instances must provide a normal __dict__.
+- ApplicationConfig may be a standard dataclass without slots.
+- Tests must be able to construct a modified configuration with dict(vars(config)).
+- Unknown configuration fields must still be rejected deterministically.
+- Do not mutate the supplied ApplicationConfig instance.
+
+Dependency Override Propagation Contract
+
+- Apply all dependency overrides before constructing any downstream service.
+- Maintain one effective dependency map containing defaults and overrides.
+- Every downstream service must receive dependencies from that effective map.
+- If rate_limiter is overridden, chat_gateway must receive that exact overridden instance.
+- Upstream overrides must propagate to every downstream dependent service.
+- Do not construct downstream services using stale default instances.
+- Do not reconstruct, clone, or mutate override instances.
+- Container attributes and downstream dependency attributes must reference the exact supplied override object.
+- The single-override and multiple-override tests must pass.
+- All existing and newly generated unittest tests must pass.
