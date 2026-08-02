@@ -58,3 +58,14 @@ Security Test Constraints
 - Test dangerous command detection using harmless symbolic names rather than executable code fragments.
 - Do not call or reference Python exec, eval, os.system, subprocess.Popen, or shell=True.
 - All generated files must pass the Mission Runner forbidden-content policy.
+
+Git Ref Validation Acceptance Criteria
+
+- Valid Git refs must allow common branch and tag formats such as main, feature/login, release/1.0, v1.0.0, hotfix-123, and refs/heads/main.
+- Dots and forward slashes are valid when used in normal Git ref positions.
+- Reject refs containing whitespace, control characters, backslashes, shell metacharacters, @{, .., consecutive slashes, leading slash, trailing slash, trailing dot, or a .lock suffix.
+- Reject refs beginning with a hyphen.
+- Reject empty refs.
+- Ref validation must follow Git naming rules closely without being more restrictive than necessary.
+- Tests must include valid branch names, valid semantic-version tags, and malformed unsafe refs.
+- All existing and newly generated unittest tests must pass.
