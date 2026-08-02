@@ -1,58 +1,129 @@
-# Connect Adapters to Mission Runner
+Mission: Connect Engine Adapters to Mission Runner
 
-## Objective
+Goal
 
-Replace direct engine construction inside MissionRunner with the Engine Adapter Layer.
+Connect the existing Engine Adapter Layer to Mission Runner with minimal and controlled changes.
 
-MissionRunner must communicate only through adapters and must never instantiate concrete engines directly.
+Existing Components
 
-The external behaviour of MissionRunner must remain unchanged.
+- agent/ai/mission_runner.py
+- agent/ai/engine_adapters.py
+- agent/ai/retry_engine.py
+- agent/validators/validation_engine.py
+- agent/git/patch_engine.py
+- agent/git/review_engine.py
+- agent/ai/code_generator.py
+- agent/ai/prompt_builder.py
 
----
+Core Requirements
 
-## Acceptance Criteria
+- Do not completely rewrite Mission Runner.
+- Modify only the minimum necessary sections.
+- Preserve existing successful mission behavior.
+- Preserve dependency injection.
+- Preserve all current security checks.
+- Preserve existing branch creation, file generation, validation, commit, and push behavior.
+- Never merge automatically into main.
 
-- MissionRunner must use CodeGeneratorAdapter.
+Adapter Construction
+
+- MissionRunner must use RetryAdapter.
 - MissionRunner must use ValidationAdapter.
 - MissionRunner must use PatchAdapter.
 - MissionRunner must use GitReviewAdapter.
-- MissionRunner must use RetryAdapter.
-- No direct dependency on concrete engine implementations.
-- Dependency Injection must remain supported.
-- Existing retry behaviour must remain unchanged.
-- Existing validation behaviour must remain unchanged.
-- Existing patch behaviour must remain unchanged.
-- Existing git review behaviour must remain unchanged.
-- Existing public MissionRunner API must remain compatible.
+- MissionRunner must not instantiate the wrapped concrete engines directly.
+- ValidationAdapter must receive the active resolved repository root.
+- PatchAdapter must receive the active resolved repository root.
+- GitReviewAdapter must receive the active resolved repository root.
+- RetryAdapter must receive the active max_attempts value.
+- The default construction must use RetryAdapter(max_attempts=max_attempts).
+- Dependency-injected adapters must be preserved and used exactly as provided.
+- MissionRunner must never replace or recreate injected adapters.
 
----
+Command-Line Behavior
 
-## Deliverables
+- Preserve support for:
 
-agent/ai/mission_runner.py
+python -m ai.mission_runner mission_name
 
-agent/tests/test_mission_runner_adapters.py
+- Add support for:
 
----
+python -m ai.mission_runner mission_name --max-attempts 3
 
-## Adapter Testing and Dependency Injection Acceptance Criteria
+- The default maximum attempts value must be 3.
+- Values from 1 through 5 must be accepted.
+- Invalid values must be handled through argparse.
+- Invalid values must raise SystemExit.
+- ValueError must not escape from command-line parsing.
 
-- Tests must inject fake or dummy adapters directly through the MissionRunner constructor.
-- MissionRunner must preserve and use the exact injected adapter objects without replacing or recreating them.
-- Never monkeypatch adapter classes after MissionRunner has already imported or instantiated them.
-- Test doubles may define counters such as run_calls, review_calls, validation_calls, or apply_calls.
-- Production RetryAdapter, PatchAdapter, ValidationAdapter and GitReviewAdapter must not expose test-only counters.
-- Tests must never expect PatchAdapter.commit(), PatchAdapter.push(), PatchAdapter.commit_calls or PatchAdapter.push_calls because these are not public APIs.
-- Existing Git commit and push behaviour must remain outside PatchAdapter.
-- PatchAdapter must only perform patch apply and dry-run operations.
-- Commit and push behaviour must be tested by mocking the existing commit boundary.
-- Retry tests must inject a fake RetryAdapter returning deterministic retry decisions.
-- Validation retry tests must inject a fake ValidationAdapter that fails once and then succeeds.
-- Git review approval tests must inject a fake GitReviewAdapter returning risk=low and recommendation=approve.
-- Git review rejection tests must inject a fake GitReviewAdapter returning risk=high, critical, reject or manual_review.
-- Git review must execute after validation and before commit.
-- Successful approval must produce a successful mission result.
-- Retry after validation failure must succeed when validation later succeeds.
-- Tests must use only unittest and unittest.mock.
-- Generated tests must match the real public API of engine_adapters.py.
+Retry Behavior
+
+- Retry generation, parsing, compilation, validation, and unittest failures when RetryAdapter permits it.
+- Stop immediately when RetryAdapter returns blocked or non-retryable.
+- Preserve the original mission text and exact deliverable allowlist on every attempt.
+- Never expose secrets or unlimited logs in retry feedback.
+- Provider authentication, authorization, billing, security, unsafe-path, and secret-exposure failures must stop immediately.
+
+Validation Behavior
+
+- ValidationAdapter must validate generated files and tests.
+- Validation failure must prevent commit and push.
+- A retryable validation failure may be retried.
+- Successful validation must proceed to Git review.
+
+Patch Behavior
+
+- PatchAdapter must only perform unified-diff dry-run or apply operations.
+- PatchAdapter must not be responsible for Git commit or push.
+- Preserve path protections, rollback, and atomic update behavior.
+- Never modify unrelated files.
+
+Git Review Behavior
+
+- GitReviewAdapter must run after successful validation and before commit or push.
+- Risk low with recommendation approve may proceed.
+- Risk high or critical must block commit and push.
+- Recommendation manual_review or reject must block commit and push.
+- A successful mission must never bypass Git review.
+
+Cleanup Behavior
+
+- New deliverables from a failed attempt must be removed.
+- Pre-existing deliverables must be restored with their original bytes and permissions.
+- Unrelated files must remain unchanged.
+- Final failure must leave the working tree clean.
+- Cleanup must only affect the exact deliverable allowlist.
+
+Testing Policy
+
+- Use Python standard library unittest only.
+- Use unittest.mock for mocks.
+- Never import or use pytest.
+- Never add new testing dependencies.
+- Never modify requirements.txt.
+- Every generated Python file must pass py_compile.
+- Multiline with statements must use valid Python 3.12 syntax.
+- Tests must reflect the real public APIs in agent/ai/engine_adapters.py.
+
+Adapter Test Requirements
+
+- Inject fake adapters directly through the MissionRunner constructor.
+- Preserve the exact injected adapter objects.
+- Fake adapters may contain test counters.
+- Production adapters must not be expected to contain test-only counters.
+- Never expect PatchAdapter.commit, PatchAdapter.push, commit_calls, or push_calls.
+- Test Git operations by mocking the existing commit-and-push boundary.
+- Test successful completion on the first attempt.
+- Test successful completion after retry.
+- Test compilation, validation, and unittest retry behavior.
+- Test provider and security failures stop immediately.
+- Test Git review approval and blocking results.
+- Test repository-root and max-attempts propagation.
+- Test cleanup and restoration behavior.
+- Test existing Mission Runner compatibility.
 - All existing and newly generated unittest tests must pass.
+
+Deliverables
+
+- agent/ai/mission_runner.py
+- agent/tests/test_mission_runner_adapters.py
