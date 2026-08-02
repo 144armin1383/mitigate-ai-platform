@@ -96,3 +96,14 @@ State Transition and Dependency Contract
 - Every test must create a fresh MissionQueue instance and fresh temporary persistence path.
 - State from one unittest must never leak into another unittest.
 - All existing and newly generated unittest tests must pass.
+
+Python Enum and Deserialization Acceptance Criteria
+
+- Never use TypeScript-style casting syntax such as "as MissionState".
+- Python source must use valid Python 3.12 syntax only.
+- Deserialize enum values by calling the enum class explicitly.
+- Mission state deserialization must use MissionState(str(value)).
+- Invalid persisted mission states must raise ValueError.
+- All generated Python files must pass py_compile before unittest execution.
+- The generated mission_queue.py must not contain the token sequence " as MissionState".
+- All existing and newly generated unittest tests must pass.
