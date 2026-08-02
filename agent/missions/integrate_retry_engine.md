@@ -146,6 +146,14 @@ Testing Requirements
 - Test existing one-attempt successful mission behavior remains compatible
 - All existing and newly generated unittest tests must pass
 
+Additional Acceptance Criteria
+
+- Absolute paths that resolve inside the repository root are valid.
+- Normalize repository-internal absolute paths into repository-relative paths before validation.
+- Reject only absolute paths that resolve outside the repository root.
+- Preserve all existing path traversal protections.
+- Existing retry cleanup behavior must remain unchanged.
+- All existing and newly generated unittest tests must pass.
 Deliverables
 
 agent/ai/mission_runner.py
