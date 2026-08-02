@@ -165,3 +165,19 @@ Deliverables
 - agent/providers/provider_rate_limiter.py
 - agent/providers/provider_rate_limiter.example.json
 - agent/tests/test_provider_rate_limiter.py
+
+Duplicate Request and Atomic Registration Contract
+
+- check_and_register() must perform duplicate detection, limit checking, and registration within one atomic critical section.
+- For a given project_id and request_id, only the first successful registration may return allowed=true.
+- A repeated request_id within the active window must not be treated as a new successful registration.
+- A duplicate check_and_register() call must return allowed=false with a deterministic blocked_reason such as duplicate_request.
+- Duplicate request identifiers must not consume additional quota.
+- Concurrent calls using the same project_id and request_id must produce exactly one successful result.
+- All other concurrent duplicate calls must return allowed=false.
+- Duplicate registration must not update the original timestamp.
+- Duplicate registration must not extend the rate-limit window.
+- check_request() may report whether capacity exists, but check_and_register() must guarantee exactly-once registration semantics.
+- Duplicate detection must occur before available-capacity evaluation.
+- The test_atomic_check_and_register unittest must produce exactly one true result.
+- All existing and newly generated unittest tests must pass.
