@@ -302,3 +302,21 @@ Generated File Safety Contract
 - Do not dynamically execute metadata, summaries, paths, filters, or stored JSON values.
 - Every generated deliverable must pass Mission Runner forbidden-content validation before py_compile and unittest discovery.
 - All existing and newly generated unittest tests must pass.
+
+Strict Test Implementation Safety Contract
+
+- Neither production code nor test code may contain the four-character sequence e-v-a-l immediately followed by an opening parenthesis.
+- Do not use Python eval.
+- Do not use ast.literal_eval.
+- Do not create any function, method, helper, mock, variable, comment, docstring, string literal, or test name that contains the forbidden sequence.
+- Parse JSON only with json.loads().
+- Serialize JSON only with json.dumps().
+- Inspect persisted JSON by opening the file and using json.load() or json.loads().
+- Use explicit dictionaries and normal unittest assertions.
+- Do not dynamically interpret Python literals.
+- Do not dynamically interpret strings as expressions.
+- Do not use exec, compile, __import__, importlib, subprocess, os.system, shell=True, or dynamic execution.
+- Test deterministic serialization by comparing json.loads() results or exact JSON text.
+- Test filters and summaries through direct public method calls.
+- Every generated production and test file must pass the Mission Runner forbidden-content scan.
+- All existing and newly generated unittest tests must pass.
