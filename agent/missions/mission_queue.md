@@ -67,3 +67,32 @@ Circular Dependency Acceptance Criteria
 - Persisted queue data containing a cycle must be rejected during load.
 - The test_circular_dependency_rejection unittest must pass.
 - All existing and newly generated unittest tests must pass.
+
+State Transition and Dependency Contract
+
+- Mission state transitions must be explicit and deterministic.
+- claim() may select only pending or retrying missions whose dependencies are all completed.
+- claim() must change the selected mission state to running atomically.
+- complete() may be called only for a running mission.
+- fail() may be called only for a running mission.
+- Tests for complete() and fail() must call claim() first and must not bypass the running state.
+- A failed mission with retry attempts remaining must become retrying.
+- A failed mission with no retry attempts remaining must become failed.
+- A retrying mission may be claimed again only when all dependencies remain completed.
+- blocked and cancelled missions must never be claimable.
+- Cancelling a completed, failed, or already cancelled mission must raise ValueError.
+- Resuming is allowed only for blocked or cancelled missions.
+- Resuming any other mission state must raise ValueError.
+- Completing, failing, blocking, cancelling, or resuming an unknown mission identifier must raise KeyError.
+- A mission with an unresolved dependency must not be claimable.
+- A mission may be claimed only after every dependency has status completed.
+- Dependency checks must use mission identifiers, not queue position or creation order.
+- A failed, blocked, cancelled, running, retrying, or pending dependency does not satisfy dependency completion.
+- Dependency graph validation must be atomic.
+- If enqueue or update introduces a circular dependency, reject the operation with ValueError and leave the queue unchanged.
+- Detect self-cycles, two-node cycles, and longer cycles.
+- Circular dependency validation must also run when loading persisted state.
+- Test cases must use isolated temporary queue files and must not share state across tests.
+- Every test must create a fresh MissionQueue instance and fresh temporary persistence path.
+- State from one unittest must never leak into another unittest.
+- All existing and newly generated unittest tests must pass.
