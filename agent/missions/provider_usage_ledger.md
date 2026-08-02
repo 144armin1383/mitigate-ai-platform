@@ -252,3 +252,21 @@ Testing Consistency
 
 - Generated implementation and tests must follow the same duplicate, validation, UTC range, currency, and unknown-cost contracts.
 - All existing and newly generated unittest tests must pass.
+
+Provider Usage Ledger Atomic Temporary File Contract
+
+- Atomic persistence must use a safe temporary file located in the same directory as the target ledger file.
+- Internally generated temporary filenames such as ".usage.json.tmp" or "usage.json.tmp" must be accepted.
+- The path validator must distinguish trusted internally generated temporary filenames from untrusted user-supplied filenames.
+- Internal temporary filenames may begin with one leading dot.
+- Internal temporary filenames may end with ".tmp".
+- Temporary filenames must still reject slashes, backslashes, path traversal, control characters, absolute paths, empty names, and symbolic-link escape.
+- _safe_file_path() must not reject a valid internally generated atomic-write filename merely because it begins with a dot.
+- Atomic temporary paths must resolve inside the configured ledger directory.
+- The temporary file must be flushed and fsynced before os.replace().
+- os.replace() must atomically replace the target ledger file.
+- Temporary files must be removed after failed writes when safely possible.
+- ProviderUsageLedger initialization must successfully create its initial deterministic JSON state.
+- Every unittest setUp() must be able to instantiate ProviderUsageLedger successfully.
+- Tests for atomic persistence, recovery, corruption detection, recording, summaries, validation, and redaction must execute beyond object construction.
+- All existing and newly generated unittest tests must pass.
