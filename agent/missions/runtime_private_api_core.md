@@ -329,3 +329,68 @@ Authentication Construction Contract
 - Missing or unresolved authentication configuration must produce HTTP authentication responses during request handling rather than constructor exceptions whenever possible.
 - Constructor validation must not reject configurations used by the unauthenticated health-live endpoint tests.
 
+
+Complete HTTP Response Contract
+
+- Every request path must produce exactly one complete HTTP response.
+- Every response path must call send_response() exactly once.
+- Every response path must send all required headers.
+- Every response path must call end_headers() before writing the body.
+- Every response with a body must include an exact Content-Length header calculated from the UTF-8 encoded response bytes.
+- Write the complete response body to wfile before returning.
+- Flush wfile after writing the response body.
+- Set close_connection to true after writing the response unless a correct persistent-connection implementation is explicitly maintained.
+- Never leave a client waiting for connection close to determine body length.
+- Never omit both Content-Length and connection close.
+
+Response Helper
+
+- Implement one shared response-writing helper used by successful and error responses.
+- The helper must serialize deterministic JSON to UTF-8 bytes before sending headers.
+- The helper must set:
+  - Content-Type: application/json; charset=utf-8
+  - Content-Length: exact encoded byte length
+  - Cache-Control: no-store
+  - X-Content-Type-Options: nosniff
+  - Connection: close
+- The helper must call send_response(), send_header(), end_headers(), wfile.write(), and wfile.flush() in the correct order.
+- Do not call send_error(), because its default HTML response format is not allowed.
+- Do not write more than one response for a request.
+
+Immediate Error Responses
+
+- Missing authentication must return HTTP 401 immediately.
+- Invalid authentication must return HTTP 403 immediately.
+- Unsupported Content-Type must return HTTP 415 immediately.
+- Malformed JSON must return HTTP 400 immediately.
+- Non-object JSON must return HTTP 400 immediately.
+- Oversized request bodies must return HTTP 413 immediately.
+- Unknown routes must return HTTP 404 immediately.
+- Unexpected exceptions must return safe HTTP 500 immediately.
+- Every immediate error path must use the shared complete-response helper.
+
+Health Response Rules
+
+- GET /health/live must return immediately without waiting for RuntimeService state changes.
+- GET /health/ready must read a current safe runtime status and return immediately.
+- GET /v1/runtime/status must not block on runtime lifecycle transitions.
+- Health and status handlers must never wait on server shutdown or request-thread completion.
+
+Request Body Handling
+
+- Read no more than request_body_limit_bytes plus one byte.
+- Validate Content-Length before reading when present.
+- Do not perform an unbounded read from rfile.
+- Do not wait for EOF to finish reading a request body.
+- For requests with Content-Length, read exactly that bounded number of bytes.
+- For POST requests requiring a body, reject missing or invalid Content-Length deterministically.
+
+Threading and Locking
+
+- Do not hold the API lifecycle lock while processing HTTP requests.
+- Do not hold an internal lock while calling RuntimeService public methods.
+- Request handlers must not wait on the server thread itself.
+- Avoid nested acquisition of non-reentrant locks.
+- All request handlers must terminate within bounded test timeouts.
+- All Runtime Private API tests must complete without TimeoutError or deadlock.
+- All existing and newly generated unittest tests must pass.
