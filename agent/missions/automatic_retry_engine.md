@@ -101,3 +101,12 @@ Deliverables
 
 agent/ai/retry_engine.py
 agent/tests/test_retry_engine.py
+
+Additional Acceptance Criteria
+
+- safe_error_bytes must support small positive values used in tests, including 50.
+- Reject only zero or negative safe_error_bytes values.
+- Truncation must be deterministic and must never exceed the configured byte limit.
+- Truncation must preserve valid UTF-8 output.
+- Secret redaction must occur before truncation.
+- All existing and newly generated unittest tests must pass.
