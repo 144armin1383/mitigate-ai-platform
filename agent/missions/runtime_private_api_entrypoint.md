@@ -421,3 +421,41 @@ Deliverables
 
 - agent/api/runtime_private_api.py
 - agent/tests/test_runtime_private_api.py
+
+Ephemeral Port and Server Readiness Contract
+
+- Port value 0 must be supported for tests and controlled runtime use.
+- Port 0 means the operating system selects an available ephemeral port.
+- RuntimeAPIConfig validation must accept port 0.
+- After the HTTP server is constructed and bound, read the actual bound address from the server socket.
+- address() must return the actual bound host and actual bound port.
+- address() must never continue returning configured port 0 after successful binding.
+- The actual bound port must be an integer greater than zero.
+- Do not guess or preselect an ephemeral port before binding.
+
+Start Readiness
+
+- start() must not return success until the HTTP server has been constructed, bound, and is ready to accept connections.
+- Create and bind the server before starting the serving thread.
+- Store the actual bound address before start() returns.
+- Use a bounded readiness event or equivalent deterministic synchronization.
+- Do not use arbitrary sleep calls as the primary readiness mechanism.
+- If readiness is not reached within a bounded timeout, stop and close the server and return api_start_failed.
+- start() must remain idempotent.
+- Repeated start() calls must return the same actual bound address while the server is running.
+
+Context Manager
+
+- __enter__() must call start() and return only after the server is ready.
+- A request made immediately after entering the context manager must succeed.
+- __exit__() must stop and close the server safely.
+
+Test Isolation
+
+- Each test server instance must bind independently.
+- Tests must not reuse a closed server socket.
+- Tests must not retain stale configured port 0 after a prior server instance.
+- stop() and close() must clear active server and thread references safely.
+- Every test must clean up its server thread and socket.
+- The context-manager lifecycle, lifecycle-endpoint, and oversized-body tests must receive an actual bound port greater than zero.
+- All existing and newly generated unittest tests must pass.
