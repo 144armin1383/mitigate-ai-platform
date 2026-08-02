@@ -1,0 +1,197 @@
+Mission: Build Provider Usage Ledger
+
+Goal
+
+Create a reusable multi-project ledger for recording AI provider token usage, estimated costs, fallback usage, and deterministic usage reports.
+
+Architecture
+
+- Use Python standard library only.
+- Do not add external dependencies.
+- Do not modify requirements.txt.
+- Remain provider-neutral and project-neutral.
+- Integrate with the existing Provider and Model Registry through dependency injection.
+- Support dependency injection for project resolver, model resolver, pricing resolver, clock, and identifier generation.
+- Fully typed and compatible with Python 3.12.
+
+Usage Record
+
+Each usage record must contain:
+
+- usage_id
+- project_id
+- request_id
+- mission_id
+- conversation_id
+- task_type
+- provider_id
+- model_id
+- started_at
+- completed_at
+- input_tokens
+- output_tokens
+- total_tokens
+- estimated_cost
+- cost_currency
+- fallback_used
+- success
+- safe_error_code
+
+Validation
+
+- usage_id must be unique.
+- Duplicate usage identifiers must be rejected.
+- Every record must belong to exactly one project_id.
+- Unknown projects must be rejected through the injected project resolver.
+- Provider and model identifiers must be validated when a model resolver is configured.
+- input_tokens and output_tokens must be non-negative integers.
+- total_tokens must equal input_tokens plus output_tokens.
+- estimated_cost must be non-negative or null.
+- Unknown cost must remain null and must never be converted to zero.
+- completed_at must not be earlier than started_at.
+- fallback_used must be boolean.
+- Cross-project access must be rejected.
+
+Privacy and Security
+
+- Never store prompts.
+- Never store completions.
+- Never store chat message text.
+- Never store images or uploaded file contents.
+- Never store API keys, bearer tokens, passwords, authorization headers, or provider credentials.
+- Never store raw provider responses.
+- Never expose unrestricted filesystem paths.
+- Events and reports must contain safe metadata only.
+
+Pricing
+
+- Pricing must be supplied through a dependency-injected pricing resolver.
+- Do not hardcode provider prices.
+- Pricing may include separate input and output token rates.
+- Missing pricing must return estimated_cost=null.
+- Historical records must preserve their originally recorded estimated cost.
+- Pricing changes must not silently recalculate historical usage.
+- Currency mismatches must be reported safely.
+- Never claim exact cost when pricing is unknown.
+
+Public Interface
+
+Provide a ProviderUsageLedger class with:
+
+- record_usage(record)
+- estimate_cost(provider_id, model_id, input_tokens, output_tokens)
+- get_usage(usage_id)
+- list_usage(project_id, filters=None)
+- daily_summary(project_id, date)
+- monthly_summary(project_id, year, month)
+- range_summary(project_id, start, end)
+- summary_by_provider(project_id, start=None, end=None)
+- summary_by_model(project_id, start=None, end=None)
+- summary_by_task(project_id, start=None, end=None)
+- status(project_id=None)
+- latest_events(limit, project_id=None)
+
+Reporting
+
+Reports must support:
+
+- request_count
+- successful_requests
+- failed_requests
+- input_tokens
+- output_tokens
+- total_tokens
+- estimated_cost
+- unknown_cost_count
+- fallback_count
+- currency
+
+Reporting Rules
+
+- Use UTC date boundaries.
+- Summary ordering must be deterministic.
+- Empty summaries must return zero counts.
+- Never fabricate cost.
+- Unknown costs must increment unknown_cost_count.
+- Different currencies must be reported separately.
+- Do not combine incompatible currencies into one total.
+- Reports must remain isolated per project.
+- Filters must support provider_id, model_id, task_type, success, and fallback_used.
+
+Persistence
+
+- Persist usage records and events as deterministic JSON.
+- Use atomic writes.
+- Use file locking.
+- Recover safely after restart.
+- Reject corrupted storage instead of silently overwriting it.
+- Prevent path traversal and symbolic-link escape.
+- Never modify unrelated files.
+- Public methods must not acquire the same non-reentrant lock twice.
+- Use private lock-free helpers for nested operations.
+- Tests involving locks must use bounded timeouts and must never hang.
+
+Structured Events
+
+Emit safe deterministic events for:
+
+- usage_recorded
+- usage_rejected
+- pricing_unknown
+- usage_summary_created
+
+Events may contain safe identifiers, token counts, known cost, currency, success, and fallback status.
+
+Testing Policy
+
+- Use Python standard library unittest only.
+- Never import or use pytest.
+- Never add testing dependencies.
+- Never modify requirements.txt.
+- Use unittest.mock.
+- Use tempfile and TemporaryDirectory.
+- Tests must not perform network access.
+- Tests must not call real providers.
+- Tests must not execute Git commands or Background Worker.
+- Use fake project resolver, model resolver, pricing resolver, clock, and identifier generator.
+- Every generated Python file must pass py_compile.
+- Tests must run from repository root with unittest discovery.
+- Use repository-root imports.
+- Do not modify sys.path.
+
+Testing Requirements
+
+- Test usage recording.
+- Test duplicate usage rejection.
+- Test invalid negative token values.
+- Test invalid token totals.
+- Test invalid negative cost.
+- Test project isolation.
+- Test provider and model validation.
+- Test fallback recording.
+- Test known pricing calculation.
+- Test unknown pricing.
+- Test historical cost preservation.
+- Test daily summary.
+- Test monthly summary.
+- Test range summary.
+- Test summary by provider.
+- Test summary by model.
+- Test summary by task.
+- Test mixed-currency reporting.
+- Test unknown-cost counting.
+- Test empty summary.
+- Test UTC boundaries.
+- Test atomic persistence.
+- Test restart recovery.
+- Test corrupted storage rejection.
+- Test deterministic serialization.
+- Test secret and content redaction.
+- Test unrelated files remain unchanged.
+- All existing and newly generated unittest tests must pass.
+
+Deliverables
+
+- agent/providers/provider_usage_ledger.py
+- agent/providers/provider_usage.example.json
+- agent/tests/test_provider_usage_ledger.py
