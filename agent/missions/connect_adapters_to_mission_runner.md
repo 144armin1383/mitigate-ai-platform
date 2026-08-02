@@ -125,3 +125,14 @@ Acceptance Criteria
 - No ValueError escapes from CLI parsing.
 - All existing and generated unittest tests pass.
 - Working tree remains clean after failures.
+
+Mandatory Testing Policy
+
+- Use Python standard library unittest only.
+- Never import pytest.
+- Never use pytest fixtures, decorators, assertions, raises, monkeypatch, parametrize, or tmp_path.
+- Never add pytest or any new test dependency.
+- Never modify requirements.txt.
+- Generated test files must be directly compatible with unittest discovery.
+- The literal statement import pytest must never appear in generated files.
+- All existing and newly generated unittest tests must pass.
