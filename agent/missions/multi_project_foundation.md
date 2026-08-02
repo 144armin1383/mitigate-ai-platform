@@ -245,3 +245,30 @@ Deliverables
 - agent/projects/project_registry.py
 - agent/projects/mitigate.project.example.json
 - agent/tests/test_project_registry.py
+
+Project Identifier and Timestamp Contract
+
+- Valid project_id values may be short.
+- A project_id with one or more characters must be accepted when all characters are valid.
+- Valid characters are lowercase ASCII letters, digits, hyphen, and underscore.
+- Examples that must be accepted include:
+  - b
+  - r1
+  - site_2
+  - timefx-web
+- Project identifiers must not begin or end with a hyphen or underscore.
+- Project identifiers must not contain whitespace, slashes, backslashes, dots, control characters, or path traversal sequences.
+- Project identifiers must remain deterministic and case-sensitive.
+- Uppercase project identifiers must be rejected unless explicitly normalized before validation.
+- Validation rules used by production code and unittest fixtures must be identical.
+- The test_deterministic_listing and test_atomic_persistence_and_restart_recovery unittests must accept their valid short identifiers.
+
+- created_at and updated_at must use UTC timestamps.
+- Updating a project must always produce an updated_at value different from the previous updated_at.
+- Do not rely only on whole-second timestamp precision.
+- Use microsecond precision or a deterministic monotonic timestamp strategy.
+- updated_at must never move backwards.
+- If the injected clock returns the same timestamp, the registry must still advance updated_at deterministically.
+- created_at must remain unchanged after project updates.
+- The test_project_update unittest must pass.
+- All existing and newly generated unittest tests must pass.
