@@ -157,3 +157,13 @@ Final Integration Acceptance Criteria
 - Git review approve may continue to commit and push.
 - Git review manual_review, high, critical, or reject must stop before commit and push.
 - All existing and newly generated unittest tests must pass.
+
+Retry Adapter Construction Acceptance Criteria
+
+- RetryAdapter must always be constructed with max_attempts.
+- MissionRunner must pass its active max_attempts value into RetryAdapter.
+- The default RetryAdapter construction must be RetryAdapter(max_attempts=max_attempts).
+- A dependency-injected RetryAdapter must be used exactly as provided and must not be recreated.
+- The default max_attempts value must remain 3.
+- Command-line max-attempts values from 1 through 5 must propagate into RetryAdapter.
+- All existing and newly generated unittest tests must pass.
