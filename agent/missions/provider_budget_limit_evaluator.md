@@ -145,3 +145,14 @@ Deliverables
 
 - agent/providers/provider_budget_limit_evaluator.py
 - agent/tests/test_provider_budget_limit_evaluator.py
+
+Generated Test Safety Contract
+
+- Generated source and test files must not contain the substring "eval(" anywhere.
+- Do not call Python eval().
+- Do not mention "eval(" inside comments, docstrings, strings, test names, fixture names, or assertions.
+- Use explicit comparisons, dictionary lookups, helper functions, dataclass construction, and normal unittest assertions instead.
+- Do not use exec(), compile(), __import__(), subprocess shell execution, or dynamic code evaluation.
+- Test names should use words such as evaluation, decision, ordering, or result without forming the forbidden substring.
+- Every generated deliverable must pass Mission Runner forbidden-content validation before py_compile and unittest execution.
+- All existing and newly generated unittest tests must pass.
