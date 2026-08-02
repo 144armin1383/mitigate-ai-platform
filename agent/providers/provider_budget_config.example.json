@@ -1,0 +1,19 @@
+{
+  "project_alpha": {
+    "created_at": "2024-01-01T00:00:00.000000Z",
+    "currency": "USD",
+    "daily_budget": 25.0,
+    "daily_token_limit": 100000,
+    "enabled": true,
+    "hard_limit_enabled": true,
+    "monthly_budget": 500.0,
+    "monthly_token_limit": 2000000,
+    "per_request_budget": 2.5,
+    "per_request_input_token_limit": 8192,
+    "per_request_output_token_limit": 2048,
+    "project_id": "project_alpha",
+    "soft_warning_percent": 80,
+    "unknown_pricing_policy": "warn",
+    "updated_at": "2024-01-01T00:00:00.000000Z"
+  }
+}
