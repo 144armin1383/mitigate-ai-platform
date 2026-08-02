@@ -208,3 +208,25 @@ Sensitive Payload Redaction
 - Redacted payloads must remain JSON-safe and deterministic.
 - The test_result_redaction unittest must find payload["password"] equal to "[redacted]".
 - All existing and newly generated unittest tests must pass.
+
+Final Mission Output Ordering Contract
+
+- build_missions() must return missions in final deterministic dependency-safe order.
+- The returned list must not remain in raw planner step order when that order violates dependencies.
+- Every dependency must appear before its dependant in the returned mission list.
+- If mission R depends on mission S, the returned order must be ["S", "R"].
+- Generated mission identifiers must preserve the exact sequence produced by the injected identifier generator.
+- If the identifier generator yields X1 and then X2 for two independent valid steps, the returned mission identifiers must be ["X1", "X2"] unless dependency ordering requires otherwise.
+- Do not sort final missions lexicographically by mission_id.
+- Do not reverse the identifier-generator sequence.
+- Do not rebuild or regenerate mission identifiers during ordering.
+- Generate each mission_id exactly once.
+- Build the complete step_id to mission_id mapping exactly once.
+- Convert dependencies using that fixed mapping.
+- Apply stable topological ordering to mission objects after dependency conversion.
+- Among dependency-ready missions, preserve original validated step order before applying any secondary tie-breaker.
+- Priority and step_id tie-breakers must never reverse the identifier-generation order when steps are otherwise equivalent under the tested contract.
+- order_missions() and build_missions() must use the same deterministic ordering rules.
+- The test_deterministic_mission_identifiers unittest must return ["X1", "X2"].
+- The test_dependency_before_dependant_ordering unittest must return ["S", "R"].
+- All existing and newly generated unittest tests must pass.
