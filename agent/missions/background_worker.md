@@ -116,3 +116,17 @@ Final Worker Loop and Exclusive Claim Contract
 - The test_graceful_shutdown unittest must observe both idle and shutdown events.
 - Structured event order must be deterministic.
 - All existing and newly generated unittest tests must pass.
+
+Python Package Import Contract
+
+- Generated tests must import project modules using repository-root package paths.
+- Use imports from agent.runtime.background_worker, not runtime.background_worker.
+- Use imports from agent.runtime.mission_queue, not runtime.mission_queue.
+- Use imports from agent.ai.autonomous_controller, not ai.autonomous_controller.
+- Tests must run successfully from the repository root with unittest discovery.
+- Do not modify sys.path inside tests.
+- Do not rely on the current working directory being agent/.
+- The generated background worker CLI may support python -m agent.runtime.background_worker from the repository root.
+- If compatibility with python -m runtime.background_worker is required from inside agent/, implement explicit import fallbacks in production code, not test-only path hacks.
+- All generated imports must match the existing package layout.
+- All existing and newly generated unittest tests must pass.
