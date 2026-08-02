@@ -42,3 +42,12 @@ Deliverables
 
 agent/git/review_engine.py
 agent/tests/test_git_review_engine.py
+
+Additional Acceptance Criteria
+
+- Treat secret-like filenames as critical risk regardless of file status.
+- Secret-like filenames include .env, .env.*, *.pem, *.key, id_rsa, id_ed25519, credentials.*, secrets.*, and files containing token, secret, password, or credential in the filename.
+- Secret detection must inspect the basename and full repository-relative path case-insensitively.
+- A changed, added, deleted, or renamed secret-like file must produce risk level critical.
+- Secret-like file detection must not read or expose file contents.
+- All existing and newly generated unittest tests must pass.
