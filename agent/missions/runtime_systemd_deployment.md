@@ -240,3 +240,17 @@ Deliverables
 - agent/deploy/systemd/healthcheck.sh
 - agent/deploy/systemd/README.md
 - agent/tests/test_runtime_systemd_deployment.py
+
+Systemd Directive Test Contract
+
+- Tests that validate systemd directives must inspect complete logical lines.
+- Do not use a beginning-of-string regular expression such as r"^RestartSec=" against the entire multi-line unit content without multiline mode.
+- Acceptable validation methods include:
+  - assertIn("RestartSec=5s", service_content)
+  - checking service_content.splitlines()
+  - a regular expression compiled with re.MULTILINE
+- Apply the same rule to Restart, TimeoutStopSec, KillSignal, User, Group, EnvironmentFile, ExecStart, and all other line-oriented systemd directives.
+- Do not require RestartSec or another Service directive to appear at the beginning of the entire file.
+- Keep all directives inside their valid systemd sections.
+- The generated systemd unit must remain syntactically valid.
+- All existing and newly generated unittest tests must pass.
