@@ -254,3 +254,20 @@ Systemd Directive Test Contract
 - Keep all directives inside their valid systemd sections.
 - The generated systemd unit must remain syntactically valid.
 - All existing and newly generated unittest tests must pass.
+
+Install Script Compatibility Contract
+
+For compatibility with repository tests, the install script must contain a literal file existence check using:
+
+-f /etc/mitigate-ai/runtime.env
+
+Do not hide this path behind a shell variable for that specific existence check.
+
+The script may still define ENV_DEST, but the preservation logic must visibly contain:
+
+if [[ -f /etc/mitigate-ai/runtime.env ]]
+
+or an equivalent literal path check.
+
+Repository compatibility takes precedence over shell abstraction for this single check.
+
