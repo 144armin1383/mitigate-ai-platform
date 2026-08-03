@@ -1,0 +1,41 @@
+[Unit]
+Description=MITIGATE AI Runtime Private API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/srv/mitigate/mitigate-ai-platform
+EnvironmentFile=/etc/mitigate-ai/runtime.env
+ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.api.runtime_private_api
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+UMask=0077
+
+# Allow write access only to required runtime data and log directories
+ReadWritePaths=/srv/mitigate/data /var/log/mitigate-ai
+RuntimeDirectory=mitigate-ai-runtime
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target
