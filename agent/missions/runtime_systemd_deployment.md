@@ -233,10 +233,10 @@ Generated File Safety
 
 Deliverables
 
-- deploy/systemd/mitigate-ai-runtime.service
-- deploy/systemd/mitigate-ai-runtime.env.example
-- deploy/systemd/install.sh
-- deploy/systemd/uninstall.sh
-- deploy/systemd/healthcheck.sh
-- deploy/systemd/README.md
+- agent/deploy/systemd/mitigate-ai-runtime.service
+- agent/deploy/systemd/mitigate-ai-runtime.env.example
+- agent/deploy/systemd/install.sh
+- agent/deploy/systemd/uninstall.sh
+- agent/deploy/systemd/healthcheck.sh
+- agent/deploy/systemd/README.md
 - agent/tests/test_runtime_systemd_deployment.py
