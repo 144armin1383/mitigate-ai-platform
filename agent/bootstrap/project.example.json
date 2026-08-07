@@ -1,25 +1,19 @@
 {
-  "project_id": "example-project",
-  "project_name": "Example Portable Project",
-  "repository": "https://example.invalid/repository.git",
-  "default_branch": "main",
-  "site_type": "generic_git",
-  "cms_type": "custom",
+  "name": "<PROJECT>",
+  "project": "<PROJECT>",
+  "environment": "<ENV>",
+  "description": "Portable project example (placeholders only; non-operational)",
+  "version": "0.0.0",
+  "site_type": "<SITE_TYPE>",
   "adapter": "<SITE_ADAPTER>",
-  "canonical_url": "https://www.example.com",
-  "allowed_paths": ["."],
-  "denied_paths": [],
-  "environment": {
-    "name": "<ENVIRONMENT>"
-  },
-  "seo_enabled": true,
-  "performance_monitoring_enabled": true,
-  "availability_monitoring_enabled": true,
-  "security_monitoring_enabled": true,
-  "accessibility_monitoring_enabled": true,
-  "ecommerce_enabled": false,
-  "autonomous_low_risk_fixes": true,
-  "autonomous_medium_risk_fixes": false,
-  "memory_enabled": true,
-  "metadata": {}
+  "supported_site_types": [
+    "wordpress",
+    "lovable",
+    "react",
+    "nextjs",
+    "static",
+    "php",
+    "generic_git",
+    "custom"
+  ]
 }
