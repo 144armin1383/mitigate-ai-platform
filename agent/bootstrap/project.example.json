@@ -1,62 +1,25 @@
 {
-  "name": "project-template",
-  "description": "Portable project template - provider-neutral and platform-agnostic. No secrets or protected runtime values are embedded.",
+  "project_id": "example-project",
+  "project_name": "Example Portable Project",
+  "repository": "https://example.invalid/repository.git",
+  "default_branch": "main",
+  "site_type": "generic_git",
+  "cms_type": "custom",
   "adapter": "<SITE_ADAPTER>",
-  "profiles": {
-    "wordpress": {
-      "type": "wordpress",
-      "paths": {
-        "root": "public",
-        "content": "public/wp-content"
-      },
-      "notes": "Example WordPress profile. Requires External Secret configuration for database and provider runtime."
-    },
-    "lovable": {
-      "type": "lovable",
-      "paths": {
-        "root": "site"
-      },
-      "notes": "Lovable site profile. Runtime/provider credentials are supplied externally."
-    },
-    "react": {
-      "type": "react",
-      "build": "npm run build",
-      "dist_dir": "build",
-      "notes": "React SPA profile with static export. No secrets in template."
-    },
-    "nextjs": {
-      "type": "nextjs",
-      "build": "npm run build",
-      "dist_dir": ".next",
-      "notes": "Next.js (nextjs) profile. Server/runtime settings provided externally."
-    },
-    "static": {
-      "type": "static",
-      "public_dir": "public",
-      "notes": "Static site profile for plain HTML/CSS/JS."
-    },
-    "php": {
-      "type": "php",
-      "public_dir": "public",
-      "notes": "Generic PHP profile without CMS assumptions."
-    },
-    "generic_git": {
-      "type": "generic_git",
-      "notes": "Generic Git profile for arbitrary projects not tied to a specific framework."
-    },
-    "custom": {
-      "type": "custom",
-      "notes": "Custom adapter profile stub. Implement adapter-specific behavior outside this template."
-    }
+  "canonical_url": "https://www.example.com",
+  "allowed_paths": ["."],
+  "denied_paths": [],
+  "environment": {
+    "name": "<ENVIRONMENT>"
   },
-  "supported_adapters": [
-    "wordpress",
-    "lovable",
-    "react",
-    "nextjs",
-    "static",
-    "php",
-    "generic_git",
-    "custom"
-  ]
+  "seo_enabled": true,
+  "performance_monitoring_enabled": true,
+  "availability_monitoring_enabled": true,
+  "security_monitoring_enabled": true,
+  "accessibility_monitoring_enabled": true,
+  "ecommerce_enabled": false,
+  "autonomous_low_risk_fixes": true,
+  "autonomous_medium_risk_fixes": false,
+  "memory_enabled": true,
+  "metadata": {}
 }

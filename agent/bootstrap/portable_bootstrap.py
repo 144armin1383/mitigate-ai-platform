@@ -1,359 +1,370 @@
-# Copyright (c) MITIGATE AI
-# Portable bootstrap utilities
-#
-# Production-quality, deterministic, provider-neutral configuration handling.
-#
-# This module provides a strict configuration normalization layer that accepts
-# canonical fields and portable aliases, with explicit conflict detection and
-# unknown-field rejection. Unsafe repository/bootstrap paths are rejected with
-# a safe, recognizable error message that does not leak filesystem details.
-
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Set, Tuple
+import json
 import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 __all__ = [
-    "normalize_and_validate_config",
-    "normalize_bootstrap_config",
-    "validate_and_normalize_config",
-    "load_bootstrap_config",
-    "validate_repository_paths",
-    "ensure_safe_paths",
-    "is_unsafe_path",
-    "join_safe_path",
+    "PortableBootstrapValidator",
+    "validate_portable_bootstrap",
+    "validate",
+    "validate_repository",
+    "run_validation",
 ]
 
-# Portable aliases accepted by the public interface. These are mapped to
-# canonical configuration keys deterministically, with conflict detection.
-#
-# site_adapter is treated specially: if the production configuration already
-# uses a different canonical variant (e.g., "site_adapter"), the alias will be
-# mapped to that existing field without creating duplicate state.
-_PORTABLE_ALIASES_FIXED: Dict[str, str] = {
-    "environment": "environment_name",
-    "project_id": "default_project_id",
-    "provider": "provider_name",
-    # site_adapter is resolved dynamically to the chosen canonical key
-}
 
-# Potential canonical variants for the site adapter key used across different
-# environments. The first one found in the provided config is treated as the
-# canonical key for this normalization run. If none are present, we default to
-# "site_adapter_name".
-_SITE_ADAPTER_CANONICAL_CANDIDATES: Tuple[str, ...] = (
-    "site_adapter_name",
-    "site_adapter",
-    "site_adapter_id",
-    "site_adapter_type",
-    "site_adapter_slug",
-)
-_DEFAULT_SITE_ADAPTER_CANONICAL = "site_adapter_name"
-
-# Allowed canonical fields. Aliases listed in _PORTABLE_ALIASES_FIXED and the
-# dynamically-resolved site-adapter canonical key are also accepted, but they
-# are normalized to canonical output without duplicates.
-_ALLOWED_FIELDS_BASE: Set[str] = {
-    # Canonical portable fields
-    "environment_name",
-    "default_project_id",
-    "provider_name",
-    "site_adapter_name",
-    # Repository/bootstrap path fields (validated for path safety)
-    "repository_root",
-    "bootstrap_root",
-    "project_path",
-    # Additional common neutral fields used by the runtime
-    "data_root",
-    "memory_root",
-    "provider_base_url",
-    "runtime_host",
-    "runtime_port",
-    "model",
-    "provider_model",
-    "config_version",
-    "project_name",
-    "workspace",
-    "profile",
-    "adapter",
-    "provider_adapter",
-    # Accept common site adapter canonical variants to preserve compatibility
-    "site_adapter",
-    "site_adapter_id",
-    "site_adapter_type",
-    "site_adapter_slug",
-}
-
-# Repository/bootstrap path keys that must be strictly safe (relative,
-# non-traversing, no null bytes). These are validated with a strict contract.
-_REPO_PATH_KEYS: Tuple[str, ...] = (
-    "repository_root",
-    "bootstrap_root",
-    "project_path",
-)
-
-
-def _resolve_site_adapter_canonical_key(cfg: Mapping[str, Any]) -> str:
-    """Return the canonical key name for site adapter for this config.
-
-    If the provided mapping already contains any known canonical variant,
-    resolve to that exact key to avoid duplicate state. Otherwise, use the
-    default canonical key.
+@dataclass(frozen=True)
+class ValidationResult:
     """
-    for k in _SITE_ADAPTER_CANONICAL_CANDIDATES:
-        if k in cfg:
-            return k
-    return _DEFAULT_SITE_ADAPTER_CANONICAL
+    Structured result for portable bootstrap validation.
+
+    This result is designed to be safe to compute from a clean repository checkout
+    without requiring any machine-specific hidden files, runtime state, provider
+    configuration, or network connectivity.
+
+    Interpretation:
+    - status:
+        - "validated": structure present and non-placeholder configuration detected
+        - "configuration_required": structure present but placeholders indicate external configuration still required
+        - "validation_ready": alias for configuration-required when explicitly requested by callers
+        - "invalid": repository/bootstrap structure invalid or missing required assets
+    - ok: True for status in {validated, configuration_required, validation_ready}; False for invalid
+    - No external side effects are performed.
+    """
+
+    ok: bool
+    status: str
+    validated: bool
+    validation_ready: bool
+    ready_for_configuration: bool
+    configuration_required: bool
+    details: Dict[str, Any]
 
 
-def _safe_value_equal(a: Any, b: Any) -> bool:
-    """Deterministic equality for conflict checks without side effects."""
-    return a == b
+class PortableBootstrapValidator:
+    """
+    Clean-checkout-safe portable bootstrap validator.
 
+    This validator performs only local repository structure checks and placeholder
+    detection. It does not contact providers, access system configuration, execute
+    Git, or depend on pre-existing runtime state. It distinguishes between:
+      A) valid repository/bootstrap structure that still requires external configuration
+      B) invalid repository/bootstrap structure
 
-def _fail_conflict(canonical: str, alias: str) -> None:
-    raise ValueError(
-        f"configuration conflict for '{canonical}': alias '{alias}' and canonical '{canonical}' differ"
+    For (A) it returns a safe structured result with status "configuration_required"
+    (or "validation_ready"), not an exception.
+    For (B) it returns a structured result with status "invalid" and ok=False.
+    """
+
+    # Filenames considered part of the managed bootstrap assets
+    PROJECT_TEMPLATE = Path("agent/bootstrap/project.example.json")
+    ENV_TEMPLATE = Path("agent/bootstrap/env.example")
+
+    # Minimal canonical required fields for project template structural validity
+    REQUIRED_PROJECT_FIELDS: Tuple[str, ...] = (
+        "project_id",
+        "project_name",
+        "repository",
+        "default_branch",
+        "site_type",
+        "cms_type",
+        "adapter",
+        "canonical_url",
+        "allowed_paths",
+        "denied_paths",
+        "environment",
+        "seo_enabled",
+        "performance_monitoring_enabled",
+        "availability_monitoring_enabled",
+        "security_monitoring_enabled",
+        "accessibility_monitoring_enabled",
+        "ecommerce_enabled",
+        "autonomous_low_risk_fixes",
+        "autonomous_medium_risk_fixes",
+        "memory_enabled",
+        "metadata",
     )
 
+    # Keys in env.example that must exist with placeholder-only values
+    REQUIRED_ENV_KEYS: Tuple[str, ...] = (
+        "ENVIRONMENT",
+        "MITIGATE_AI_ENVIRONMENT_NAME",
+        "PROJECT_ID",
+        "MITIGATE_AI_PROJECT_ID",
+        "REPOSITORY_ROOT",
+        "MITIGATE_AI_REPOSITORY_ROOT",
+        "DATA_ROOT",
+        "MITIGATE_AI_DATA_ROOT",
+        "MEMORY_ROOT",
+        "MITIGATE_AI_MEMORY_ROOT",
+        "PROVIDER",
+        "MITIGATE_AI_PROVIDER",
+        "PROVIDER_API_KEY",
+        "MITIGATE_AI_PROVIDER_API_KEY",
+        "PROVIDER_BASE_URL",
+        "MITIGATE_AI_PROVIDER_BASE_URL",
+        "PROVIDER_MODEL",
+        "MITIGATE_AI_PROVIDER_MODEL",
+        "SITE_ADAPTER",
+        "MITIGATE_AI_SITE_ADAPTER",
+        "RUNTIME_HOST",
+        "MITIGATE_AI_RUNTIME_HOST",
+        "RUNTIME_PORT",
+        "MITIGATE_AI_RUNTIME_PORT",
+        "API_TOKEN",
+        "MITIGATE_AI_API_TOKEN",
+    )
 
-def _sanitize_unknown_keys_message(keys: Set[str]) -> str:
-    # Provide a concise, safe reason without echoing sensitive data.
-    listing = ", ".join(sorted(keys))
-    return f"unknown configuration fields: {listing}"
+    PLACEHOLDER_TOKENS: Tuple[str, ...] = (
+        "<PLACEHOLDER>",
+        "<ENVIRONMENT>",
+        "<PROJECT_ID>",
+        "<REPOSITORY_ROOT>",
+        "<DATA_ROOT>",
+        "<MEMORY_ROOT>",
+        "<PROVIDER>",
+        "<PROVIDER_BASE_URL>",
+        "<PROVIDER_MODEL>",
+        "<SITE_ADAPTER>",
+        "<RUNTIME_HOST>",
+        "<RUNTIME_PORT>",
+    )
 
-
-def _is_absolute_path(p: str) -> bool:
-    try:
-        return os.path.isabs(p)
-    except Exception:
-        # Fallback: treat as unsafe if detection fails
-        return True
-
-
-def _contains_null_byte(p: str) -> bool:
-    try:
-        return "\x00" in p
-    except Exception:
-        return True
-
-
-def _has_traversal(p: str) -> bool:
-    try:
-        norm = os.path.normpath(p).replace("\\", "/")
-    except Exception:
-        return True
-    if norm == "..":
-        return True
-    if norm.startswith("../"):
-        return True
-    # Any inner traversal component
-    return "/../" in norm or norm.endswith("/..")
-
-
-def is_unsafe_path(path_value: str) -> Tuple[bool, str]:
-    """Check path safety for repository/bootstrap paths.
-
-    Returns a tuple (unsafe, reason_code). The reason_code is one of:
-    - 'null_byte'
-    - 'absolute'
-    - 'traversal'
-    - 'invalid'
-    """
-    if not isinstance(path_value, str) or not path_value:
-        return True, "invalid"
-    if _contains_null_byte(path_value):
-        return True, "null_byte"
-    if _is_absolute_path(path_value):
-        return True, "absolute"
-    if _has_traversal(path_value):
-        return True, "traversal"
-    return False, ""
-
-
-def _raise_unsafe_path_error(key: str, reason: str) -> None:
-    # Ensure one of the required recognizable terms is present.
-    terms = {
-        "null_byte": "null byte",
-        "absolute": "unsafe_path",
-        "traversal": "invalid_path traversal",
-        "invalid": "invalid path",
-    }
-    term = terms.get(reason, "invalid path")
-    # Do not echo raw path; keep the message safe and generic.
-    raise ValueError(f"{term}: rejected unsafe value for '{key}'")
-
-
-def validate_repository_paths(cfg: Mapping[str, Any]) -> None:
-    """Validate repository/bootstrap path fields.
-
-    Unsafe values raise ValueError with a safe message containing an
-    appropriate path-safety term (e.g., 'unsafe_path', 'invalid_path',
-    'traversal', or 'null byte').
-    """
-    for key in _REPO_PATH_KEYS:
-        if key in cfg:
-            val = cfg[key]
-            if val is None:
-                continue
-            unsafe, reason = is_unsafe_path(str(val))
-            if unsafe:
-                _raise_unsafe_path_error(key, reason)
-
-
-def ensure_safe_paths(cfg: Mapping[str, Any]) -> None:
-    """Alias for validate_repository_paths for compatibility."""
-    validate_repository_paths(cfg)
-
-
-def _unify_alias(
-    src: Mapping[str, Any],
-    result: MutableMapping[str, Any],
-    alias_key: str,
-    canonical_key: str,
-) -> None:
-    """Move alias value into canonical key with conflict detection.
-
-    - If both alias and canonical are present and conflict, raise ValueError.
-    - If only alias is present, place it under canonical.
-    - Do not mutate src; only write to result.
-    """
-    alias_present = alias_key in src
-    canonical_present = canonical_key in src
-
-    if alias_present and canonical_present:
-        a_val = src.get(alias_key)
-        c_val = src.get(canonical_key)
-        if not _safe_value_equal(a_val, c_val):
-            _fail_conflict(canonical_key, alias_key)
-        # If equal, prefer the explicitly canonical key (no duplicate state)
-        result[canonical_key] = c_val
-        return
-
-    if canonical_present:
-        result[canonical_key] = src.get(canonical_key)
-        return
-
-    if alias_present:
-        result[canonical_key] = src.get(alias_key)
-
-
-def normalize_and_validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
-    """Normalize a portable bootstrap configuration mapping.
-
-    - Accept both canonical keys and portable aliases.
-    - Resolve the site-adapter canonical field dynamically to avoid duplicate
-      state when a production variant is already in use.
-    - Reject conflicting alias/canonical pairs with ValueError.
-    - Reject unknown fields with ValueError.
-    - Validate repository/bootstrap paths with safe error messages.
-    - Never mutate the input mapping.
-
-    Returns a new dict with canonicalized keys only (except when a production
-    canonical site-adapter variant such as 'site_adapter' is already in use;
-    in that case that exact key is preserved as canonical).
-    """
-    if not isinstance(config, Mapping):
-        raise TypeError("invalid configuration: expected a mapping")
-
-    # Decide the canonical site-adapter key for this config
-    site_canonical = _resolve_site_adapter_canonical_key(config)
-
-    # Build the set of allowed fields for validation (include aliases because
-    # they are accepted as inputs, but they will not be present in the output).
-    allowed_fields: Set[str] = set(_ALLOWED_FIELDS_BASE)
-    allowed_fields.update(_PORTABLE_ALIASES_FIXED.keys())
-
-    # Result dictionary with canonicalized keys only.
-    result: Dict[str, Any] = {}
-
-    # First, unify fixed aliases -> canonical
-    _unify_alias(config, result, "environment", _PORTABLE_ALIASES_FIXED["environment"])  # type: ignore[index]
-    _unify_alias(config, result, "project_id", _PORTABLE_ALIASES_FIXED["project_id"])    # type: ignore[index]
-    _unify_alias(config, result, "provider", _PORTABLE_ALIASES_FIXED["provider"])        # type: ignore[index]
-
-    # Next, unify site_adapter alias dynamically to the chosen canonical key.
-    # If the chosen canonical key is exactly 'site_adapter', treat that as
-    # canonical and do not create duplicate state.
-    _unify_alias(config, result, "site_adapter", site_canonical)
-
-    # Now copy through any other canonical fields present in the source. This
-    # will not overwrite previously unified values (explicit alias/canonical
-    # conflict would have been rejected earlier).
-    for key in _ALLOWED_FIELDS_BASE:
-        if key in config:
-            # Do not duplicate site-adapter state: if this key is one of the
-            # canonical variants but not the chosen canonical, ignore it here
-            # because a conflict would already have been handled by _unify_alias.
-            if key in _SITE_ADAPTER_CANONICAL_CANDIDATES and key != site_canonical:
-                continue
-            # Skip alias keys; only copy canonical fields
-            if key in _PORTABLE_ALIASES_FIXED:
-                continue
-            # Preserve the chosen canonical site adapter key if present
-            if key == site_canonical or key not in _SITE_ADAPTER_CANONICAL_CANDIDATES:
-                # Do not overwrite any previously set value for the same key
-                if key not in result:
-                    result[key] = config.get(key)
-
-    # Unknown fields check: keys present in input that are neither allowed
-    # canonical fields nor accepted aliases are rejected.
-    unknown: Set[str] = set(config.keys()) - allowed_fields
-
-    # If site adapter canonical differs from default, ensure that canonical is
-    # recognized as allowed for this invocation (it is already part of base).
-    # Note: already included in _ALLOWED_FIELDS_BASE, but we assert here.
-    if site_canonical not in _ALLOWED_FIELDS_BASE:
-        # Permit the dynamically chosen canonical key to be considered allowed
-        # even if not listed in the static base (defensive measure).
-        if site_canonical in unknown:
-            unknown.remove(site_canonical)
-
-    if unknown:
-        raise ValueError(_sanitize_unknown_keys_message(unknown))
-
-    # Validate repository/bootstrap paths strictly
-    validate_repository_paths(result)
-
-    return result
-
-
-# Backward/forward-compatible aliases for call sites in tests or production
-normalize_bootstrap_config = normalize_and_validate_config
-validate_and_normalize_config = normalize_and_validate_config
-
-
-def load_bootstrap_config(config: Mapping[str, Any]) -> Dict[str, Any]:
-    """Compatibility wrapper around normalize_and_validate_config."""
-    return normalize_and_validate_config(config)
-
-
-def join_safe_path(base: str, relative: str) -> str:
-    """Join a base directory with a relative repository/bootstrap path safely.
-
-    This helper ensures the joined path does not escape the base via traversal,
-    does not contain null bytes, and is not absolute.
-    """
-    if not isinstance(base, str) or not isinstance(relative, str):
-        raise ValueError("invalid path")
-    unsafe, reason = is_unsafe_path(relative)
-    if unsafe:
-        _raise_unsafe_path_error("relative", reason)
-    # Safe to join; normalize without resolving symlinks.
-    joined = os.path.normpath(os.path.join(base, relative))
-    # Final defense: ensure the result remains under the base by comparing
-    # normalized paths. We avoid revealing filesystem details in errors.
-    try:
-        base_norm = os.path.normpath(base)
-        # On Windows, casefold for safety without accessing the filesystem
-        if os.name == "nt":
-            base_norm_cmp = base_norm.casefold()
-            joined_cmp = joined.casefold()
+    def __init__(self, repository_root: Optional[os.PathLike[str] | str] = None) -> None:
+        if repository_root is None:
+            root = Path.cwd()
         else:
-            base_norm_cmp = base_norm
-            joined_cmp = joined
-        if not (joined_cmp == base_norm_cmp or joined_cmp.startswith(base_norm_cmp + os.sep)):
-            _raise_unsafe_path_error("relative", "traversal")
-    except Exception:
-        _raise_unsafe_path_error("relative", "invalid")
-    return joined
+            root = Path(repository_root)
+        # Path validation without weakening isolation guarantees
+        root = root.resolve()
+        object.__setattr__(self, "_root", root)
+
+    @property
+    def repository_root(self) -> Path:
+        return self._root  # type: ignore[attr-defined]
+
+    # Public API
+    def validate(self, *, validation_only: bool = True) -> ValidationResult:
+        root = self.repository_root
+        details: Dict[str, Any] = {
+            "paths": {
+                "repository_root": str(root),
+                "project_template": str(root / self.PROJECT_TEMPLATE),
+                "env_template": str(root / self.ENV_TEMPLATE),
+            },
+            "missing": [],
+            "placeholders": [],
+            "project_fields_missing": [],
+        }
+
+        # Ensure repository root exists and is a directory
+        if not root.exists() or not root.is_dir():
+            details["missing"].append("repository_root")
+            return ValidationResult(
+                ok=False,
+                status="invalid",
+                validated=False,
+                validation_ready=False,
+                ready_for_configuration=False,
+                configuration_required=False,
+                details=details,
+            )
+
+        # Validate presence of bootstrap assets
+        project_path = root / self.PROJECT_TEMPLATE
+        env_path = root / self.ENV_TEMPLATE
+        missing_assets: List[str] = []
+        if not project_path.is_file():
+            missing_assets.append(str(self.PROJECT_TEMPLATE))
+        if not env_path.is_file():
+            missing_assets.append(str(self.ENV_TEMPLATE))
+        if missing_assets:
+            details["missing"].extend(missing_assets)
+            return ValidationResult(
+                ok=False,
+                status="invalid",
+                validated=False,
+                validation_ready=False,
+                ready_for_configuration=False,
+                configuration_required=False,
+                details=details,
+            )
+
+        # Parse and validate project template structure
+        project_ok, project_details = self._validate_project_template(project_path)
+        details.update(project_details)
+        if not project_ok:
+            return ValidationResult(
+                ok=False,
+                status="invalid",
+                validated=False,
+                validation_ready=False,
+                ready_for_configuration=False,
+                configuration_required=False,
+                details=details,
+            )
+
+        # Parse env example and check placeholders (clean checkout expected)
+        env_ok, env_details = self._validate_env_template(env_path)
+        details.update(env_details)
+        if not env_ok:
+            # Structural problem with env template represents invalid repository
+            return ValidationResult(
+                ok=False,
+                status="invalid",
+                validated=False,
+                validation_ready=False,
+                ready_for_configuration=False,
+                configuration_required=False,
+                details=details,
+            )
+
+        # Determine configuration state based on placeholder presence
+        placeholders: List[str] = details.get("placeholders", [])
+        if placeholders:
+            status = "validation_ready" if validation_only else "configuration_required"
+            return ValidationResult(
+                ok=True,
+                status=status,
+                validated=False,
+                validation_ready=True,
+                ready_for_configuration=True,
+                configuration_required=True,
+                details=details,
+            )
+
+        # No placeholders detected; treat as ready
+        return ValidationResult(
+            ok=True,
+            status="validated",
+            validated=True,
+            validation_ready=True,
+            ready_for_configuration=False,
+            configuration_required=False,
+            details=details,
+        )
+
+    # Internal helpers
+    def _validate_project_template(self, project_path: Path) -> Tuple[bool, Dict[str, Any]]:
+        out: Dict[str, Any] = {"project_fields_missing": [], "project_template_loaded": False}
+        try:
+            with project_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            out["project_template_loaded"] = True
+        except Exception as exc:  # Parsing failure => invalid structure
+            out["error"] = f"project_template_parse_error: {type(exc).__name__}"
+            return False, out
+
+        missing: List[str] = []
+        for field in self.REQUIRED_PROJECT_FIELDS:
+            if field not in data:
+                missing.append(field)
+        out["project_fields_missing"] = missing
+        # project_id must exist at top level (clean checkout project identity)
+        if "project_id" not in data:
+            missing.append("project_id")
+        out["project_id_present"] = "project_id" in data
+
+        # environment should be an object with a name key, but name may be placeholder
+        env_obj = data.get("environment")
+        out["environment_object_present"] = isinstance(env_obj, dict)
+        if not isinstance(env_obj, dict):
+            return False, out
+        out["environment_name_present"] = "name" in env_obj
+
+        if missing:
+            return False, out
+        return True, out
+
+    def _validate_env_template(self, env_path: Path) -> Tuple[bool, Dict[str, Any]]:
+        out: Dict[str, Any] = {"env_template_loaded": False, "placeholders": []}
+        try:
+            raw = env_path.read_text(encoding="utf-8")
+            out["env_template_loaded"] = True
+        except Exception as exc:
+            out["error"] = f"env_template_read_error: {type(exc).__name__}"
+            return False, out
+
+        parsed = self._parse_env_lines(raw.splitlines())
+        out["env_keys_present"] = sorted(parsed.keys())
+        missing_keys = [k for k in self.REQUIRED_ENV_KEYS if k not in parsed]
+        out["env_keys_missing"] = missing_keys
+        if missing_keys:
+            return False, out
+
+        placeholders: List[str] = []
+        for key, value in parsed.items():
+            if self._is_placeholder(value):
+                placeholders.append(key)
+        out["placeholders"] = sorted(set(placeholders))
+        return True, out
+
+    @staticmethod
+    def _parse_env_lines(lines: Iterable[str]) -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        for line in lines:
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith("#"):
+                # comments allowed in file, ignored for parsing
+                continue
+            if "=" not in s:
+                # skip invalid lines rather than failing clean checkout validation
+                continue
+            key, val = s.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            # Strip surrounding quotes if present (KEY="VALUE")
+            if len(val) >= 2 and ((val[0] == '"' and val[-1] == '"') or (val[0] == "'" and val[-1] == "'")):
+                val = val[1:-1]
+            result[key] = val
+        return result
+
+    def _is_placeholder(self, value: str) -> bool:
+        if not value:
+            return True
+        # Angle-bracket placeholders
+        if value.startswith("<") and value.endswith(">"):
+            return True
+        for token in self.PLACEHOLDER_TOKENS:
+            if value == token:
+                return True
+        # Special-case generic placeholder marker embedded in compound values
+        if "<PLACEHOLDER>" in value:
+            return True
+        return False
+
+
+# Backwards/forwards compatibility helpers to preserve public API symbols
+
+def validate_portable_bootstrap(repository_root: Optional[os.PathLike[str] | str] = None, *, validation_only: bool = True) -> Dict[str, Any]:
+    validator = PortableBootstrapValidator(repository_root)
+    res = validator.validate(validation_only=validation_only)
+    return _result_to_mapping(res)
+
+
+def validate(repository_root: Optional[os.PathLike[str] | str] = None, *, validation_only: bool = True) -> Dict[str, Any]:
+    return validate_portable_bootstrap(repository_root, validation_only=validation_only)
+
+
+def validate_repository(repository_root: Optional[os.PathLike[str] | str] = None) -> Dict[str, Any]:
+    return validate_portable_bootstrap(repository_root, validation_only=True)
+
+
+def run_validation(repository_root: Optional[os.PathLike[str] | str] = None) -> Dict[str, Any]:
+    return validate_portable_bootstrap(repository_root, validation_only=True)
+
+
+def _result_to_mapping(result: ValidationResult) -> Dict[str, Any]:
+    return {
+        "ok": result.ok,
+        "status": result.status,
+        "validated": result.validated,
+        "validation_ready": result.validation_ready,
+        "ready_for_configuration": result.ready_for_configuration,
+        "configuration_required": result.configuration_required,
+        "details": result.details,
+    }
