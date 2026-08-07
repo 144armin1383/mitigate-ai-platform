@@ -44,3 +44,39 @@ All existing unittest tests must pass.
 Deliverables
 
 - agent/bootstrap/env.example
+
+Provider-Neutral Environment Requirement
+
+The generated env.example must remain strictly provider-neutral.
+
+Do not add provider-specific environment variable names.
+
+In particular, do not add environment assignments for specific AI providers.
+
+Do not add or generate provider-specific access-key variable assignments.
+
+Use only the existing generic portable variables:
+
+PROVIDER="<PROVIDER>"
+PROVIDER_API_KEY="<PLACEHOLDER>"
+PROVIDER_BASE_URL="<PROVIDER_BASE_URL>"
+PROVIDER_MODEL="<PROVIDER_MODEL>"
+
+and the existing MITIGATE_AI-prefixed generic equivalents.
+
+Provider-specific identifiers may appear only in safe explanatory comments where needed, but provider-specific authentication variable names must not be introduced.
+
+External Secret Documentation
+
+Add plain comment text near the top of env.example stating:
+
+# Secrets remain external to Git.
+# Protected runtime values are supplied externally.
+# Real access values must never be committed.
+# This committed template contains placeholders only.
+
+These comments document the security boundary without adding provider-specific access fields.
+
+Do not change existing placeholder assignments except where required to preserve the generic provider-neutral contract.
+
+The generated env.example must pass Mission Runner forbidden-content validation.
