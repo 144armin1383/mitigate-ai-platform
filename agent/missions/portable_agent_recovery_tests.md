@@ -483,3 +483,31 @@ Generated Test Safety
 Deliverables
 
 - agent/tests/test_portable_agent_recovery.py
+
+Forbidden Secret Fixture Safety
+
+Tests must never embed realistic credential, private-key, certificate-key, bearer-token, API-key, or authentication-secret material.
+
+In particular:
+
+- Do not include PEM private-key headers or footers.
+- Do not include strings resembling real private keys.
+- Do not include realistic JWTs.
+- Do not include realistic API keys.
+- Do not include bearer-token examples that resemble production credentials.
+- Do not include credential fixtures that trigger Mission Runner forbidden-content validation.
+
+Use neutral synthetic placeholders instead, for example:
+
+- "<PRIVATE_KEY_PLACEHOLDER>"
+- "<API_KEY_PLACEHOLDER>"
+- "<TOKEN_PLACEHOLDER>"
+- "<PASSWORD_PLACEHOLDER>"
+- "<AUTHORIZATION_PLACEHOLDER>"
+- "<COOKIE_PLACEHOLDER>"
+
+Security tests must validate key-name redaction and secret exclusion using safe placeholder values rather than realistic secret formats.
+
+Do not weaken secret-detection expectations.
+Do not modify production secret-redaction logic merely to satisfy the test suite.
+All existing and newly generated unittest tests must pass.
