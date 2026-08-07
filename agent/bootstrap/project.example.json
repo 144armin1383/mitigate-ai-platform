@@ -1,140 +1,62 @@
 {
-  "project_id": "example-project-001",
-  "project_name": "Example Portable Project",
-  "repository": "https://example.com/repositories/example-project.git",
-  "default_branch": "main",
-  "site_type": "wordpress",
-  "cms_type": "wordpress",
-  "adapter": {
-    "name": "portable-site-adapter",
-    "profiles": {
-      "wordpress": {
-        "type": "wordpress",
-        "content_root": "wp-content/",
-        "theme_path": "wp-content/themes/example-theme/",
-        "plugin_paths": [
-          "wp-content/plugins/"
-        ],
-        "build": {
-          "command": "echo build-wordpress"
-        },
-        "run": {
-          "command": "echo run-wordpress"
-        }
+  "name": "project-template",
+  "description": "Portable project template - provider-neutral and platform-agnostic. No secrets or protected runtime values are embedded.",
+  "adapter": "<SITE_ADAPTER>",
+  "profiles": {
+    "wordpress": {
+      "type": "wordpress",
+      "paths": {
+        "root": "public",
+        "content": "public/wp-content"
       },
-      "lovable": {
-        "type": "lovable",
-        "project_root": "site/",
-        "build": {
-          "command": "echo build-lovable"
-        },
-        "run": {
-          "command": "echo run-lovable"
-        }
+      "notes": "Example WordPress profile. Requires External Secret configuration for database and provider runtime."
+    },
+    "lovable": {
+      "type": "lovable",
+      "paths": {
+        "root": "site"
       },
-      "react": {
-        "type": "react",
-        "project_root": "app/",
-        "build": {
-          "command": "echo build-react"
-        },
-        "run": {
-          "command": "echo run-react"
-        }
-      },
-      "nextjs": {
-        "type": "nextjs",
-        "project_root": "app/",
-        "build": {
-          "command": "echo build-nextjs"
-        },
-        "run": {
-          "command": "echo run-nextjs"
-        }
-      },
-      "static": {
-        "type": "static",
-        "public_dir": "public/",
-        "build": {
-          "command": "echo build-static"
-        }
-      },
-      "php": {
-        "type": "php",
-        "public_dir": "public/",
-        "run": {
-          "command": "echo run-php"
-        }
-      },
-      "generic_git": {
-        "type": "generic_git",
-        "project_root": ".",
-        "build": {
-          "command": "echo build-generic"
-        }
-      },
-      "custom": {
-        "type": "custom",
-        "project_root": ".",
-        "notes": "Provide custom adapter behavior in code"
-      }
+      "notes": "Lovable site profile. Runtime/provider credentials are supplied externally."
+    },
+    "react": {
+      "type": "react",
+      "build": "npm run build",
+      "dist_dir": "build",
+      "notes": "React SPA profile with static export. No secrets in template."
+    },
+    "nextjs": {
+      "type": "nextjs",
+      "build": "npm run build",
+      "dist_dir": ".next",
+      "notes": "Next.js (nextjs) profile. Server/runtime settings provided externally."
+    },
+    "static": {
+      "type": "static",
+      "public_dir": "public",
+      "notes": "Static site profile for plain HTML/CSS/JS."
+    },
+    "php": {
+      "type": "php",
+      "public_dir": "public",
+      "notes": "Generic PHP profile without CMS assumptions."
+    },
+    "generic_git": {
+      "type": "generic_git",
+      "notes": "Generic Git profile for arbitrary projects not tied to a specific framework."
+    },
+    "custom": {
+      "type": "custom",
+      "notes": "Custom adapter profile stub. Implement adapter-specific behavior outside this template."
     }
   },
-  "canonical_url": "https://www.example-site.test",
-  "allowed_paths": [
-    "src/",
-    "public/",
-    "wp-content/",
-    "themes/",
-    "plugins/",
-    "assets/"
-  ],
-  "denied_paths": [
-    ".git/",
-    ".github/",
-    "node_modules/",
-    "vendor/",
-    "build/",
-    "dist/"
-  ],
-  "environment": {
-    "name": "example-environment",
-    "runtime": {
-      "host": "<RUNTIME_HOST>",
-      "port": "<RUNTIME_PORT>"
-    },
-    "provider": {
-      "name": "<PROVIDER>",
-      "base_url": "<PROVIDER_BASE_URL>",
-      "model": "<PROVIDER_MODEL>"
-    },
-    "notes": "External runtime configuration is supplied separately"
-  },
-  "seo_enabled": true,
-  "performance_monitoring_enabled": true,
-  "availability_monitoring_enabled": true,
-  "security_monitoring_enabled": true,
-  "accessibility_monitoring_enabled": true,
-  "ecommerce_enabled": false,
-  "autonomous_low_risk_fixes": true,
-  "autonomous_medium_risk_fixes": false,
-  "memory_enabled": true,
-  "metadata": {
-    "description": "Portable example project template for cross-provider recovery and migration.",
-    "maintainer": "Example Organization",
-    "labels": [
-      "portable",
-      "example"
-    ],
-    "site_profiles_supported": [
-      "wordpress",
-      "lovable",
-      "react",
-      "nextjs",
-      "static",
-      "php",
-      "generic_git",
-      "custom"
-    ]
-  }
+  "supported_adapters": [
+    "wordpress",
+    "lovable",
+    "react",
+    "nextjs",
+    "static",
+    "php",
+    "generic_git",
+    "custom"
+  ]
 }
