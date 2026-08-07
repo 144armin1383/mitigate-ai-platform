@@ -1,75 +1,51 @@
 {
-  "version": "1.0",
-  "project_id": "example-project",
-  "project_name": "Example Portable Web Project",
-  "repository": "https://github.com/your-org/your-repo",
-  "default_branch": "main",
-  "site_type": "web",
-  "cms_type": "custom",
-  "adapter": {
-    "site_adapter_name": "generic",
-    "provider_adapter_name": "local"
-  },
-  "canonical_url": "https://www.example.com",
-  "allowed_paths": ["/", "/blog", "/assets"],
-  "denied_paths": ["/admin", "/private"],
-  "environment": {
-    "name": "dev",
-    "variables": {}
-  },
-  "seo_enabled": true,
-  "performance_monitoring_enabled": true,
-  "availability_monitoring_enabled": true,
-  "security_monitoring_enabled": true,
-  "accessibility_monitoring_enabled": true,
-  "ecommerce_enabled": false,
-  "autonomous_low_risk_fixes": true,
-  "autonomous_medium_risk_fixes": false,
-  "memory_enabled": true,
-  "metadata": {
-    "description": "Provider-neutral project configuration template. Do not include secrets.",
-    "notes": "Set provider credentials externally via environment variables or secret manager."
-  },
-  "profiles": {
+  "about": "Provider-neutral project configuration template. Protected runtime configuration is external to this project file.",
+  "config_version": "<VERSION>",
+  "project_name": "<PROJECT_NAME>",
+  "environment_name": "<ENVIRONMENT>",
+  "default_project_id": "<PROJECT_ID>",
+  "provider_name": "<PROVIDER_IDENTIFIER>",
+  "site_adapter_name": "<SITE_ADAPTER_IDENTIFIER>",
+  "repository_root": "<RELATIVE_REPOSITORY_PATH>",
+  "bootstrap_root": "<RELATIVE_BOOTSTRAP_PATH>",
+  "project_path": "<RELATIVE_PROJECT_PATH>",
+  "data_root": "<DATA_ROOT>",
+  "memory_root": "<MEMORY_ROOT>",
+  "runtime_host": "<RUNTIME_HOST>",
+  "runtime_port": "<RUNTIME_PORT>",
+  "provider_base_url": "<PROVIDER_BASE_URL>",
+  "adapters": {
     "wordpress": {
-      "cms_type": "wordpress",
-      "site_type": "php",
-      "adapter": { "site_adapter_name": "wordpress", "provider_adapter_name": "local" }
+      "type": "wordpress",
+      "profile": "<PROFILE>"
     },
     "lovable": {
-      "cms_type": "lovable",
-      "site_type": "static",
-      "adapter": { "site_adapter_name": "lovable", "provider_adapter_name": "local" }
+      "type": "lovable",
+      "profile": "<PROFILE>"
     },
     "react": {
-      "cms_type": "custom",
-      "site_type": "react",
-      "adapter": { "site_adapter_name": "react", "provider_adapter_name": "local" }
+      "type": "react",
+      "profile": "<PROFILE>"
     },
     "nextjs": {
-      "cms_type": "custom",
-      "site_type": "nextjs",
-      "adapter": { "site_adapter_name": "nextjs", "provider_adapter_name": "local" }
+      "type": "nextjs",
+      "profile": "<PROFILE>"
     },
     "static": {
-      "cms_type": "custom",
-      "site_type": "static",
-      "adapter": { "site_adapter_name": "static", "provider_adapter_name": "local" }
+      "type": "static",
+      "profile": "<PROFILE>"
     },
     "php": {
-      "cms_type": "custom",
-      "site_type": "php",
-      "adapter": { "site_adapter_name": "php", "provider_adapter_name": "local" }
+      "type": "php",
+      "profile": "<PROFILE>"
     },
     "generic_git": {
-      "cms_type": "custom",
-      "site_type": "generic_git",
-      "adapter": { "site_adapter_name": "generic_git", "provider_adapter_name": "local" }
+      "type": "generic_git",
+      "profile": "<PROFILE>"
     },
     "custom": {
-      "cms_type": "custom",
-      "site_type": "web",
-      "adapter": { "site_adapter_name": "custom", "provider_adapter_name": "custom" }
+      "type": "custom",
+      "profile": "<PROFILE>"
     }
   }
 }

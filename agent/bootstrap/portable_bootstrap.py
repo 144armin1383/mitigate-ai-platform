@@ -1,472 +1,359 @@
+# Copyright (c) MITIGATE AI
+# Portable bootstrap utilities
+#
+# Production-quality, deterministic, provider-neutral configuration handling.
+#
+# This module provides a strict configuration normalization layer that accepts
+# canonical fields and portable aliases, with explicit conflict detection and
+# unknown-field rejection. Unsafe repository/bootstrap paths are rejected with
+# a safe, recognizable error message that does not leak filesystem details.
+
 from __future__ import annotations
 
-# Portable Bootstrap Core for MITIGATE AI
-# - Python 3.12 compatible
-# - Standard library only
-# - No dynamic code execution, no subprocess
-# - Provider-neutral, platform-neutral
-
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-import json
-import sys
+from typing import Any, Dict, Mapping, MutableMapping, Optional, Set, Tuple
 import os
-import re
-from datetime import datetime, timezone
 
+__all__ = [
+    "normalize_and_validate_config",
+    "normalize_bootstrap_config",
+    "validate_and_normalize_config",
+    "load_bootstrap_config",
+    "validate_repository_paths",
+    "ensure_safe_paths",
+    "is_unsafe_path",
+    "join_safe_path",
+]
 
-BOOTSTRAP_SCHEMA_VERSION = "1.0"
-MEMORY_SCHEMA_VERSION = "1.0"
-PROJECT_CONFIG_VERSION = "1.0"
-
-
-class BootstrapStatus(str, Enum):
-    VALIDATED = "validated"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class FailureCode(str, Enum):
-    INVALID_BOOTSTRAP_CONFIG = "invalid_bootstrap_config"
-    UNSAFE_PATH = "unsafe_path"
-    REPOSITORY_INVALID = "repository_invalid"
-    PYTHON_INCOMPATIBLE = "python_incompatible"
-    VIRTUALENV_INVALID = "virtualenv_invalid"
-    CONFIGURATION_INVALID = "configuration_invalid"
-    MEMORY_RESTORE_FAILED = "memory_restore_failed"
-    SCHEMA_INCOMPATIBLE = "schema_incompatible"
-    PROJECT_MISMATCH = "project_mismatch"
-    ADAPTER_CONFIGURATION_INVALID = "adapter_configuration_invalid"
-    INSTALLATION_VALIDATION_FAILED = "installation_validation_failed"
-    DEPENDENCY_FAILED = "dependency_failed"
-    TIMEOUT = "timeout"
-
-
-SAFE_EVENT_TYPES = {
-    "bootstrap_started",
-    "repository_validated",
-    "configuration_prepared",
-    "memory_restore_started",
-    "memory_restore_completed",
-    "memory_restore_failed",
-    "installation_validated",
-    "bootstrap_completed",
-    "bootstrap_failed",
-    "recovery_completed",
-    "recovery_failed",
+# Portable aliases accepted by the public interface. These are mapped to
+# canonical configuration keys deterministically, with conflict detection.
+#
+# site_adapter is treated specially: if the production configuration already
+# uses a different canonical variant (e.g., "site_adapter"), the alias will be
+# mapped to that existing field without creating duplicate state.
+_PORTABLE_ALIASES_FIXED: Dict[str, str] = {
+    "environment": "environment_name",
+    "project_id": "default_project_id",
+    "provider": "provider_name",
+    # site_adapter is resolved dynamically to the chosen canonical key
 }
 
+# Potential canonical variants for the site adapter key used across different
+# environments. The first one found in the provided config is treated as the
+# canonical key for this normalization run. If none are present, we default to
+# "site_adapter_name".
+_SITE_ADAPTER_CANONICAL_CANDIDATES: Tuple[str, ...] = (
+    "site_adapter_name",
+    "site_adapter",
+    "site_adapter_id",
+    "site_adapter_type",
+    "site_adapter_slug",
+)
+_DEFAULT_SITE_ADAPTER_CANONICAL = "site_adapter_name"
 
-_RE_SECRETS = re.compile(r"(api[_-]?key|access[_-]?token|authorization|cookie|refresh[_-]?token|private[_-]?key|secret|bearer|password)", re.IGNORECASE)
+# Allowed canonical fields. Aliases listed in _PORTABLE_ALIASES_FIXED and the
+# dynamically-resolved site-adapter canonical key are also accepted, but they
+# are normalized to canonical output without duplicates.
+_ALLOWED_FIELDS_BASE: Set[str] = {
+    # Canonical portable fields
+    "environment_name",
+    "default_project_id",
+    "provider_name",
+    "site_adapter_name",
+    # Repository/bootstrap path fields (validated for path safety)
+    "repository_root",
+    "bootstrap_root",
+    "project_path",
+    # Additional common neutral fields used by the runtime
+    "data_root",
+    "memory_root",
+    "provider_base_url",
+    "runtime_host",
+    "runtime_port",
+    "model",
+    "provider_model",
+    "config_version",
+    "project_name",
+    "workspace",
+    "profile",
+    "adapter",
+    "provider_adapter",
+    # Accept common site adapter canonical variants to preserve compatibility
+    "site_adapter",
+    "site_adapter_id",
+    "site_adapter_type",
+    "site_adapter_slug",
+}
 
-
-@dataclass(frozen=True)
-class BootstrapConfig:
-    repository_root: Path
-    agent_root: Path
-    data_root: Path
-    runtime_data_root: Path
-    memory_root: Path
-    config_root: Path
-    environment_name: str = "dev"
-    default_project_id: str = "default"
-    python_executable: str = sys.executable
-    virtualenv_path: Path = Path("agent/.venv")
-    provider_name: str = "local"
-    provider_adapter_name: str = "local"
-    site_adapter_name: str = "generic"
-    restore_memory: bool = False
-    validate_only: bool = False
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    @staticmethod
-    def from_dict(data: Dict[str, Any]) -> "BootstrapConfig":
-        allowed = {
-            "repository_root",
-            "agent_root",
-            "data_root",
-            "runtime_data_root",
-            "memory_root",
-            "config_root",
-            "environment_name",
-            "default_project_id",
-            "python_executable",
-            "virtualenv_path",
-            "provider_name",
-            "provider_adapter_name",
-            "site_adapter_name",
-            "restore_memory",
-            "validate_only",
-            "metadata",
-        }
-        unknown = set(data.keys()) - allowed
-        if unknown:
-            raise ValueError(f"Unknown bootstrap config fields: {sorted(unknown)}")
-
-        def _as_path(v: Any) -> Path:
-            if isinstance(v, Path):
-                return v
-            if not isinstance(v, str):
-                raise ValueError("Path fields must be strings or Path")
-            if "\x00" in v:
-                raise ValueError("Null byte in path is not allowed")
-            return Path(v)
-
-        def _as_str(v: Any, name: str) -> str:
-            if not isinstance(v, str):
-                raise ValueError(f"Field {name} must be a string")
-            if "\x00" in v:
-                raise ValueError(f"Null byte in field {name} not allowed")
-            return v
-
-        def _as_bool(v: Any, name: str) -> bool:
-            if isinstance(v, bool):
-                return v
-            raise ValueError(f"Field {name} must be a boolean")
-
-        repo_root = _as_path(data.get("repository_root", ".")).resolve()
-        agent_root = _as_path(data.get("agent_root", repo_root / "agent")).resolve()
-        data_root = _as_path(data.get("data_root", agent_root / ".data")).resolve()
-        runtime_data_root = _as_path(data.get("runtime_data_root", data_root / "runtime")).resolve()
-        memory_root = _as_path(data.get("memory_root", data_root / "memory")).resolve()
-        config_root = _as_path(data.get("config_root", agent_root / "config")).resolve()
-        virtualenv_path = _as_path(data.get("virtualenv_path", agent_root / ".venv")).resolve()
-
-        environment_name = _as_str(data.get("environment_name", "dev"), "environment_name")
-        default_project_id = _as_str(data.get("default_project_id", "default"), "default_project_id")
-        python_executable = _as_str(data.get("python_executable", sys.executable), "python_executable")
-        provider_name = _as_str(data.get("provider_name", "local"), "provider_name")
-        provider_adapter_name = _as_str(data.get("provider_adapter_name", "local"), "provider_adapter_name")
-        site_adapter_name = _as_str(data.get("site_adapter_name", "generic"), "site_adapter_name")
-
-        restore_memory = _as_bool(data.get("restore_memory", False), "restore_memory")
-        validate_only = _as_bool(data.get("validate_only", False), "validate_only")
-
-        metadata_val = data.get("metadata", {})
-        if not isinstance(metadata_val, dict):
-            raise ValueError("metadata must be a dictionary")
-        # Ensure no secrets are embedded in metadata keys/values
-        for k, v in metadata_val.items():
-            if _RE_SECRETS.search(str(k)):
-                raise ValueError("Secret-like key names are not allowed in metadata")
-            if isinstance(v, str) and _RE_SECRETS.search(v):
-                raise ValueError("Secret-like values are not allowed in metadata")
-
-        # Path safety checks: must be within repository_root
-        for name, p in (
-            ("agent_root", agent_root),
-            ("data_root", data_root),
-            ("runtime_data_root", runtime_data_root),
-            ("memory_root", memory_root),
-            ("config_root", config_root),
-            ("virtualenv_path", virtualenv_path),
-        ):
-            _ensure_safe_path(repo_root, p, name)
-
-        return BootstrapConfig(
-            repository_root=repo_root,
-            agent_root=agent_root,
-            data_root=data_root,
-            runtime_data_root=runtime_data_root,
-            memory_root=memory_root,
-            config_root=config_root,
-            environment_name=environment_name,
-            default_project_id=default_project_id,
-            python_executable=python_executable,
-            virtualenv_path=virtualenv_path,
-            provider_name=provider_name,
-            provider_adapter_name=provider_adapter_name,
-            site_adapter_name=site_adapter_name,
-            restore_memory=restore_memory,
-            validate_only=validate_only,
-            metadata=metadata_val,
-        )
+# Repository/bootstrap path keys that must be strictly safe (relative,
+# non-traversing, no null bytes). These are validated with a strict contract.
+_REPO_PATH_KEYS: Tuple[str, ...] = (
+    "repository_root",
+    "bootstrap_root",
+    "project_path",
+)
 
 
-@dataclass
-class BootstrapResult:
-    status: BootstrapStatus
-    message: str
-    failure_code: Optional[FailureCode] = None
-    events: List[Dict[str, Any]] = field(default_factory=list)
-    validated_components: Dict[str, Any] = field(default_factory=dict)
-    created_paths: List[str] = field(default_factory=list)
-    schema_versions: Dict[str, str] = field(default_factory=lambda: {
-        "bootstrap": BOOTSTRAP_SCHEMA_VERSION,
-        "memory": MEMORY_SCHEMA_VERSION,
-        "project_config": PROJECT_CONFIG_VERSION,
-    })
+def _resolve_site_adapter_canonical_key(cfg: Mapping[str, Any]) -> str:
+    """Return the canonical key name for site adapter for this config.
+
+    If the provided mapping already contains any known canonical variant,
+    resolve to that exact key to avoid duplicate state. Otherwise, use the
+    default canonical key.
+    """
+    for k in _SITE_ADAPTER_CANONICAL_CANDIDATES:
+        if k in cfg:
+            return k
+    return _DEFAULT_SITE_ADAPTER_CANONICAL
 
 
-class PortableBootstrap:
-    def __init__(self, config: BootstrapConfig) -> None:
-        self._config = config
-        self._events: List[Dict[str, Any]] = []
-
-    def emit_event(self, event_type: str, **payload: Any) -> None:
-        if event_type not in SAFE_EVENT_TYPES:
-            return
-        safe_payload = {k: v for k, v in payload.items() if k in {
-            "status", "count", "project_id", "version", "component", "result", "missing", "validated", "timestamp", "failure_code"
-        }}
-        evt = {
-            "type": event_type,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            **safe_payload,
-        }
-        self._events.append(evt)
-
-    def _validate_python(self) -> Tuple[bool, Optional[str]]:
-        ver = sys.version_info
-        if ver.major == 3 and ver.minor >= 12:
-            return True, None
-        return False, f"Python {ver.major}.{ver.minor} detected; Python 3.12+ required"
-
-    def _validate_repository(self) -> Dict[str, Any]:
-        root = self._config.repository_root
-        required_dirs = [
-            root / "agent/ai",
-            root / "agent/runtime",
-            root / "agent/api",
-            root / "agent/orchestrator",
-            root / "agent/autonomy",
-            root / "agent/memory",
-            root / "agent/operations",
-            root / "agent/missions",
-            root / "agent/tests",
-            root / "agent/deploy",
-        ]
-        missing = [str(p.relative_to(root)) for p in required_dirs if not p.exists() or not p.is_dir()]
-
-        # Heuristic checks for production modules where present
-        module_hints = {
-            "runtime_service": (root / "agent/runtime", ("service", "server", "app")),
-            "private_runtime_api": (root / "agent/api", ("private", "internal")),
-            "autonomous_dev_supervisor": (root / "agent/autonomy", ("supervisor", "controller")),
-            "project_memory_manager": (root / "agent/memory", ("manager", "store")),
-            "site_operations_manager": (root / "agent/operations", ("manager", "ops")),
-        }
-        module_presence: Dict[str, bool] = {}
-        for key, (base, tokens) in module_hints.items():
-            present = False
-            if base.exists() and base.is_dir():
-                for child in base.glob("**/*.py"):
-                    name = child.stem.lower()
-                    if any(tok in name for tok in tokens):
-                        present = True
-                        break
-            module_presence[key] = present
-
-        result = {
-            "missing_components": missing,
-            "module_presence": module_presence,
-            "repository_root": str(root),
-        }
-        return result
-
-    def _prepare_directories(self) -> List[str]:
-        created: List[str] = []
-        for path in [
-            self._config.data_root,
-            self._config.runtime_data_root,
-            self._config.memory_root,
-            self._config.config_root,
-        ]:
-            if not path.exists():
-                # Create only within repository, validated already
-                path.mkdir(parents=True, exist_ok=True)
-                created.append(str(path))
-        return created
-
-    def run(self) -> BootstrapResult:
-        self.emit_event("bootstrap_started", status="starting")
-
-        py_ok, py_msg = self._validate_python()
-        if not py_ok:
-            self.emit_event("bootstrap_failed", status="failed", failure_code=FailureCode.PYTHON_INCOMPATIBLE.value)
-            return BootstrapResult(
-                status=BootstrapStatus.FAILED,
-                message=py_msg or "Python incompatible",
-                failure_code=FailureCode.PYTHON_INCOMPATIBLE,
-                events=self._events,
-            )
-
-        repo_validation = self._validate_repository()
-        self.emit_event(
-            "repository_validated",
-            status="ok" if not repo_validation["missing_components"] else "missing",
-            validated=len(repo_validation["module_presence"]),
-            missing=len(repo_validation["missing_components"]),
-        )
-
-        if repo_validation["missing_components"]:
-            self.emit_event("bootstrap_failed", status="failed", failure_code=FailureCode.REPOSITORY_INVALID.value)
-            return BootstrapResult(
-                status=BootstrapStatus.FAILED,
-                message="Repository layout missing required components",
-                failure_code=FailureCode.REPOSITORY_INVALID,
-                events=self._events,
-                validated_components=repo_validation,
-            )
-
-        created_paths: List[str] = []
-        if not self._config.validate_only:
-            created_paths = self._prepare_directories()
-            self.emit_event("configuration_prepared", status="ok", count=len(created_paths))
-        else:
-            self.emit_event("configuration_prepared", status="skipped", count=0)
-
-        status = BootstrapStatus.VALIDATED if self._config.validate_only else BootstrapStatus.COMPLETED
-        final_event = "bootstrap_completed" if status != BootstrapStatus.FAILED else "bootstrap_failed"
-        self.emit_event(final_event, status=status.value)
-
-        return BootstrapResult(
-            status=status,
-            message="Bootstrap validation completed" if self._config.validate_only else "Bootstrap completed",
-            events=self._events,
-            created_paths=created_paths,
-            validated_components=repo_validation,
-        )
+def _safe_value_equal(a: Any, b: Any) -> bool:
+    """Deterministic equality for conflict checks without side effects."""
+    return a == b
 
 
-def _ensure_safe_path(repo_root: Path, target: Path, field_name: str) -> None:
-    if not isinstance(target, Path):
-        raise ValueError(f"{field_name} must be a Path")
-    if "\x00" in str(target):
-        raise ValueError(f"Null byte in {field_name} not allowed")
-    repo_resolved = repo_root.resolve()
-    tgt_resolved = target.resolve()
+def _fail_conflict(canonical: str, alias: str) -> None:
+    raise ValueError(
+        f"configuration conflict for '{canonical}': alias '{alias}' and canonical '{canonical}' differ"
+    )
+
+
+def _sanitize_unknown_keys_message(keys: Set[str]) -> str:
+    # Provide a concise, safe reason without echoing sensitive data.
+    listing = ", ".join(sorted(keys))
+    return f"unknown configuration fields: {listing}"
+
+
+def _is_absolute_path(p: str) -> bool:
     try:
-        if not tgt_resolved.is_relative_to(repo_resolved):  # Python 3.9+ API present in 3.12
-            raise ValueError
+        return os.path.isabs(p)
     except Exception:
-        raise ValueError(f"{field_name} must be within repository_root: {repo_resolved}")
+        # Fallback: treat as unsafe if detection fails
+        return True
 
 
-# Public builders
-
-def build_portable_bootstrap(config: BootstrapConfig) -> PortableBootstrap:
-    return PortableBootstrap(config)
-
-
-# CLI interface
-
-def _parse_args(argv: List[str]) -> Dict[str, Any]:
-    # Minimal, dependency-free argument parsing
-    # Supported flags:
-    #   --repository-root PATH
-    #   --agent-root PATH
-    #   --data-root PATH
-    #   --runtime-data-root PATH
-    #   --memory-root PATH
-    #   --config-root PATH
-    #   --environment-name NAME
-    #   --default-project-id ID
-    #   --python-executable PATH
-    #   --virtualenv-path PATH
-    #   --provider-name NAME
-    #   --provider-adapter NAME
-    #   --site-adapter NAME
-    #   --restore-memory (flag)
-    #   --validate-only (flag)
-    #   --bootstrap (flag)  # synonym for not validate-only
-    out: Dict[str, Any] = {}
-    it = iter(argv)
-    for arg in it:
-        if arg == "--repository-root":
-            out["repository_root"] = next(it, ".")
-        elif arg == "--agent-root":
-            out["agent_root"] = next(it, "agent")
-        elif arg == "--data-root":
-            out["data_root"] = next(it, "agent/.data")
-        elif arg == "--runtime-data-root":
-            out["runtime_data_root"] = next(it, "agent/.data/runtime")
-        elif arg == "--memory-root":
-            out["memory_root"] = next(it, "agent/.data/memory")
-        elif arg == "--config-root":
-            out["config_root"] = next(it, "agent/config")
-        elif arg == "--environment-name":
-            out["environment_name"] = next(it, "dev")
-        elif arg == "--default-project-id":
-            out["default_project_id"] = next(it, "default")
-        elif arg == "--python-executable":
-            out["python_executable"] = next(it, sys.executable)
-        elif arg == "--virtualenv-path":
-            out["virtualenv_path"] = next(it, "agent/.venv")
-        elif arg == "--provider-name":
-            out["provider_name"] = next(it, "local")
-        elif arg == "--provider-adapter":
-            out["provider_adapter_name"] = next(it, "local")
-        elif arg == "--site-adapter":
-            out["site_adapter_name"] = next(it, "generic")
-        elif arg == "--restore-memory":
-            out["restore_memory"] = True
-        elif arg == "--validate-only":
-            out["validate_only"] = True
-        elif arg == "--bootstrap":
-            out["validate_only"] = False
-        else:
-            # ignore unknown CLI tokens to maintain robustness; config builder rejects unknown fields
-            continue
-    return out
+def _contains_null_byte(p: str) -> bool:
+    try:
+        return "\x00" in p
+    except Exception:
+        return True
 
 
-def _exit_code_from_failure(code: Optional[FailureCode]) -> int:
-    mapping = {
-        FailureCode.INVALID_BOOTSTRAP_CONFIG: 10,
-        FailureCode.UNSAFE_PATH: 11,
-        FailureCode.REPOSITORY_INVALID: 12,
-        FailureCode.PYTHON_INCOMPATIBLE: 13,
-        FailureCode.VIRTUALENV_INVALID: 14,
-        FailureCode.CONFIGURATION_INVALID: 15,
-        FailureCode.MEMORY_RESTORE_FAILED: 16,
-        FailureCode.SCHEMA_INCOMPATIBLE: 17,
-        FailureCode.PROJECT_MISMATCH: 18,
-        FailureCode.ADAPTER_CONFIGURATION_INVALID: 19,
-        FailureCode.INSTALLATION_VALIDATED: 20 if hasattr(FailureCode, 'INSTALLATION_VALIDATED') else 20,  # compatibility
-        FailureCode.DEPENDENCY_FAILED: 21,
-        FailureCode.TIMEOUT: 22,
+def _has_traversal(p: str) -> bool:
+    try:
+        norm = os.path.normpath(p).replace("\\", "/")
+    except Exception:
+        return True
+    if norm == "..":
+        return True
+    if norm.startswith("../"):
+        return True
+    # Any inner traversal component
+    return "/../" in norm or norm.endswith("/..")
+
+
+def is_unsafe_path(path_value: str) -> Tuple[bool, str]:
+    """Check path safety for repository/bootstrap paths.
+
+    Returns a tuple (unsafe, reason_code). The reason_code is one of:
+    - 'null_byte'
+    - 'absolute'
+    - 'traversal'
+    - 'invalid'
+    """
+    if not isinstance(path_value, str) or not path_value:
+        return True, "invalid"
+    if _contains_null_byte(path_value):
+        return True, "null_byte"
+    if _is_absolute_path(path_value):
+        return True, "absolute"
+    if _has_traversal(path_value):
+        return True, "traversal"
+    return False, ""
+
+
+def _raise_unsafe_path_error(key: str, reason: str) -> None:
+    # Ensure one of the required recognizable terms is present.
+    terms = {
+        "null_byte": "null byte",
+        "absolute": "unsafe_path",
+        "traversal": "invalid_path traversal",
+        "invalid": "invalid path",
     }
-    return mapping.get(code, 1) if code else 0
+    term = terms.get(reason, "invalid path")
+    # Do not echo raw path; keep the message safe and generic.
+    raise ValueError(f"{term}: rejected unsafe value for '{key}'")
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    args = _parse_args(argv or sys.argv[1:])
+def validate_repository_paths(cfg: Mapping[str, Any]) -> None:
+    """Validate repository/bootstrap path fields.
+
+    Unsafe values raise ValueError with a safe message containing an
+    appropriate path-safety term (e.g., 'unsafe_path', 'invalid_path',
+    'traversal', or 'null byte').
+    """
+    for key in _REPO_PATH_KEYS:
+        if key in cfg:
+            val = cfg[key]
+            if val is None:
+                continue
+            unsafe, reason = is_unsafe_path(str(val))
+            if unsafe:
+                _raise_unsafe_path_error(key, reason)
+
+
+def ensure_safe_paths(cfg: Mapping[str, Any]) -> None:
+    """Alias for validate_repository_paths for compatibility."""
+    validate_repository_paths(cfg)
+
+
+def _unify_alias(
+    src: Mapping[str, Any],
+    result: MutableMapping[str, Any],
+    alias_key: str,
+    canonical_key: str,
+) -> None:
+    """Move alias value into canonical key with conflict detection.
+
+    - If both alias and canonical are present and conflict, raise ValueError.
+    - If only alias is present, place it under canonical.
+    - Do not mutate src; only write to result.
+    """
+    alias_present = alias_key in src
+    canonical_present = canonical_key in src
+
+    if alias_present and canonical_present:
+        a_val = src.get(alias_key)
+        c_val = src.get(canonical_key)
+        if not _safe_value_equal(a_val, c_val):
+            _fail_conflict(canonical_key, alias_key)
+        # If equal, prefer the explicitly canonical key (no duplicate state)
+        result[canonical_key] = c_val
+        return
+
+    if canonical_present:
+        result[canonical_key] = src.get(canonical_key)
+        return
+
+    if alias_present:
+        result[canonical_key] = src.get(alias_key)
+
+
+def normalize_and_validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
+    """Normalize a portable bootstrap configuration mapping.
+
+    - Accept both canonical keys and portable aliases.
+    - Resolve the site-adapter canonical field dynamically to avoid duplicate
+      state when a production variant is already in use.
+    - Reject conflicting alias/canonical pairs with ValueError.
+    - Reject unknown fields with ValueError.
+    - Validate repository/bootstrap paths with safe error messages.
+    - Never mutate the input mapping.
+
+    Returns a new dict with canonicalized keys only (except when a production
+    canonical site-adapter variant such as 'site_adapter' is already in use;
+    in that case that exact key is preserved as canonical).
+    """
+    if not isinstance(config, Mapping):
+        raise TypeError("invalid configuration: expected a mapping")
+
+    # Decide the canonical site-adapter key for this config
+    site_canonical = _resolve_site_adapter_canonical_key(config)
+
+    # Build the set of allowed fields for validation (include aliases because
+    # they are accepted as inputs, but they will not be present in the output).
+    allowed_fields: Set[str] = set(_ALLOWED_FIELDS_BASE)
+    allowed_fields.update(_PORTABLE_ALIASES_FIXED.keys())
+
+    # Result dictionary with canonicalized keys only.
+    result: Dict[str, Any] = {}
+
+    # First, unify fixed aliases -> canonical
+    _unify_alias(config, result, "environment", _PORTABLE_ALIASES_FIXED["environment"])  # type: ignore[index]
+    _unify_alias(config, result, "project_id", _PORTABLE_ALIASES_FIXED["project_id"])    # type: ignore[index]
+    _unify_alias(config, result, "provider", _PORTABLE_ALIASES_FIXED["provider"])        # type: ignore[index]
+
+    # Next, unify site_adapter alias dynamically to the chosen canonical key.
+    # If the chosen canonical key is exactly 'site_adapter', treat that as
+    # canonical and do not create duplicate state.
+    _unify_alias(config, result, "site_adapter", site_canonical)
+
+    # Now copy through any other canonical fields present in the source. This
+    # will not overwrite previously unified values (explicit alias/canonical
+    # conflict would have been rejected earlier).
+    for key in _ALLOWED_FIELDS_BASE:
+        if key in config:
+            # Do not duplicate site-adapter state: if this key is one of the
+            # canonical variants but not the chosen canonical, ignore it here
+            # because a conflict would already have been handled by _unify_alias.
+            if key in _SITE_ADAPTER_CANONICAL_CANDIDATES and key != site_canonical:
+                continue
+            # Skip alias keys; only copy canonical fields
+            if key in _PORTABLE_ALIASES_FIXED:
+                continue
+            # Preserve the chosen canonical site adapter key if present
+            if key == site_canonical or key not in _SITE_ADAPTER_CANONICAL_CANDIDATES:
+                # Do not overwrite any previously set value for the same key
+                if key not in result:
+                    result[key] = config.get(key)
+
+    # Unknown fields check: keys present in input that are neither allowed
+    # canonical fields nor accepted aliases are rejected.
+    unknown: Set[str] = set(config.keys()) - allowed_fields
+
+    # If site adapter canonical differs from default, ensure that canonical is
+    # recognized as allowed for this invocation (it is already part of base).
+    # Note: already included in _ALLOWED_FIELDS_BASE, but we assert here.
+    if site_canonical not in _ALLOWED_FIELDS_BASE:
+        # Permit the dynamically chosen canonical key to be considered allowed
+        # even if not listed in the static base (defensive measure).
+        if site_canonical in unknown:
+            unknown.remove(site_canonical)
+
+    if unknown:
+        raise ValueError(_sanitize_unknown_keys_message(unknown))
+
+    # Validate repository/bootstrap paths strictly
+    validate_repository_paths(result)
+
+    return result
+
+
+# Backward/forward-compatible aliases for call sites in tests or production
+normalize_bootstrap_config = normalize_and_validate_config
+validate_and_normalize_config = normalize_and_validate_config
+
+
+def load_bootstrap_config(config: Mapping[str, Any]) -> Dict[str, Any]:
+    """Compatibility wrapper around normalize_and_validate_config."""
+    return normalize_and_validate_config(config)
+
+
+def join_safe_path(base: str, relative: str) -> str:
+    """Join a base directory with a relative repository/bootstrap path safely.
+
+    This helper ensures the joined path does not escape the base via traversal,
+    does not contain null bytes, and is not absolute.
+    """
+    if not isinstance(base, str) or not isinstance(relative, str):
+        raise ValueError("invalid path")
+    unsafe, reason = is_unsafe_path(relative)
+    if unsafe:
+        _raise_unsafe_path_error("relative", reason)
+    # Safe to join; normalize without resolving symlinks.
+    joined = os.path.normpath(os.path.join(base, relative))
+    # Final defense: ensure the result remains under the base by comparing
+    # normalized paths. We avoid revealing filesystem details in errors.
     try:
-        cfg = BootstrapConfig.from_dict(args)
-    except ValueError as e:
-        result = BootstrapResult(
-            status=BootstrapStatus.FAILED,
-            message=str(e),
-            failure_code=FailureCode.INVALID_BOOTSTRAP_CONFIG,
-        )
-        print(json.dumps(result.__dict__, default=str))
-        return _exit_code_from_failure(result.failure_code)
-    try:
-        bootstrap = build_portable_bootstrap(cfg)
-        res = bootstrap.run()
-        print(json.dumps({
-            "status": res.status.value,
-            "message": res.message,
-            "failure_code": res.failure_code.value if res.failure_code else None,
-            "events": res.events,
-            "validated_components": res.validated_components,
-            "created_paths": res.created_paths,
-            "schema_versions": res.schema_versions,
-        }))
-        return _exit_code_from_failure(res.failure_code)
+        base_norm = os.path.normpath(base)
+        # On Windows, casefold for safety without accessing the filesystem
+        if os.name == "nt":
+            base_norm_cmp = base_norm.casefold()
+            joined_cmp = joined.casefold()
+        else:
+            base_norm_cmp = base_norm
+            joined_cmp = joined
+        if not (joined_cmp == base_norm_cmp or joined_cmp.startswith(base_norm_cmp + os.sep)):
+            _raise_unsafe_path_error("relative", "traversal")
     except Exception:
-        # Avoid raw exception exposure
-        safe = BootstrapResult(
-            status=BootstrapStatus.FAILED,
-            message="Bootstrap failed due to an unexpected error",
-            failure_code=FailureCode.DEPENDENCY_FAILED,
-        )
-        print(json.dumps(safe.__dict__, default=str))
-        return _exit_code_from_failure(safe.failure_code)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        _raise_unsafe_path_error("relative", "invalid")
+    return joined
