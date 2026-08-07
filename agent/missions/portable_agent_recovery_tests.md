@@ -550,3 +550,58 @@ The generated test file must pass Mission Runner content validation before unitt
 Do not modify production code to work around generated-test forbidden content.
 
 All existing and newly generated unittest tests must pass.
+
+Mission Runner Forbidden-Code Compatibility
+
+The generated test source itself must pass Mission Runner forbidden-content validation before unittest execution.
+
+Do not include forbidden execution patterns literally anywhere in generated Python source.
+
+This applies to:
+
+- code
+- strings
+- comments
+- docstrings
+- expected values
+- fixtures
+- assertions
+- test names
+- helper constants
+
+In particular, do not include literal call patterns for prohibited execution APIs.
+
+Do not write or embed direct shell-execution call syntax.
+
+Do not construct prohibited call strings dynamically from fragments.
+
+Do not import or call prohibited execution modules or functions.
+
+Security tests must validate the absence of dangerous execution capabilities using safe structural checks that do not reproduce the forbidden source patterns.
+
+Preferred safe strategies:
+
+- inspect allowed module names
+- inspect known safe public interfaces
+- inspect source text for neutral semantic markers that do not themselves trigger Mission Runner validation
+- assert that generated production modules expose no execution-oriented public API
+- verify production behavior through safe mocks or interfaces without reproducing prohibited call syntax
+
+Do not use:
+
+- shell execution
+- subprocess execution
+- dynamic code execution
+- process spawning
+- direct Git execution
+- direct deployment execution
+
+Do not weaken the security expectations.
+
+The entire generated file:
+
+agent/tests/test_portable_agent_recovery.py
+
+must pass Mission Runner content validation before unittest discovery.
+
+All existing and newly generated unittest tests must pass.
