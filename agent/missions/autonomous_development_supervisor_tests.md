@@ -427,3 +427,41 @@ Repository Safety
 Deliverables
 
 - agent/tests/test_autonomous_development_supervisor.py
+
+Public Type Contract Clarification
+
+The production module intentionally defines these enum types:
+
+- DevelopmentRunStatus
+- RiskLevel
+- ApprovalDecisionType
+
+These types must be tested as Python Enum classes.
+
+ApprovalDecision is NOT an enum.
+
+ApprovalDecision is intentionally a frozen dataclass representing one approval record and contains:
+
+- decision_id
+- run_id
+- approver_id
+- decision
+- constraints
+- timestamp
+- reason_code
+
+The ApprovalDecision.decision field uses ApprovalDecisionType.
+
+Tests must not require ApprovalDecision to expose Enum attributes such as __members__.
+
+Enum presence tests must validate:
+
+- DevelopmentRunStatus is an Enum
+- RiskLevel is an Enum
+- ApprovalDecisionType is an Enum
+
+ApprovalDecision tests must validate its dataclass structure and immutable approval-record behavior instead.
+
+Do not change the production implementation merely to satisfy an incorrect enum assumption.
+
+All existing and newly generated unittest tests must pass.
