@@ -1,51 +1,140 @@
 {
-  "about": "Provider-neutral project configuration template. Protected runtime configuration is external to this project file.",
-  "config_version": "<VERSION>",
-  "project_name": "<PROJECT_NAME>",
-  "environment_name": "<ENVIRONMENT>",
-  "default_project_id": "<PROJECT_ID>",
-  "provider_name": "<PROVIDER_IDENTIFIER>",
-  "site_adapter_name": "<SITE_ADAPTER_IDENTIFIER>",
-  "repository_root": "<RELATIVE_REPOSITORY_PATH>",
-  "bootstrap_root": "<RELATIVE_BOOTSTRAP_PATH>",
-  "project_path": "<RELATIVE_PROJECT_PATH>",
-  "data_root": "<DATA_ROOT>",
-  "memory_root": "<MEMORY_ROOT>",
-  "runtime_host": "<RUNTIME_HOST>",
-  "runtime_port": "<RUNTIME_PORT>",
-  "provider_base_url": "<PROVIDER_BASE_URL>",
-  "adapters": {
-    "wordpress": {
-      "type": "wordpress",
-      "profile": "<PROFILE>"
-    },
-    "lovable": {
-      "type": "lovable",
-      "profile": "<PROFILE>"
-    },
-    "react": {
-      "type": "react",
-      "profile": "<PROFILE>"
-    },
-    "nextjs": {
-      "type": "nextjs",
-      "profile": "<PROFILE>"
-    },
-    "static": {
-      "type": "static",
-      "profile": "<PROFILE>"
-    },
-    "php": {
-      "type": "php",
-      "profile": "<PROFILE>"
-    },
-    "generic_git": {
-      "type": "generic_git",
-      "profile": "<PROFILE>"
-    },
-    "custom": {
-      "type": "custom",
-      "profile": "<PROFILE>"
+  "project_id": "example-project-001",
+  "project_name": "Example Portable Project",
+  "repository": "https://example.com/repositories/example-project.git",
+  "default_branch": "main",
+  "site_type": "wordpress",
+  "cms_type": "wordpress",
+  "adapter": {
+    "name": "portable-site-adapter",
+    "profiles": {
+      "wordpress": {
+        "type": "wordpress",
+        "content_root": "wp-content/",
+        "theme_path": "wp-content/themes/example-theme/",
+        "plugin_paths": [
+          "wp-content/plugins/"
+        ],
+        "build": {
+          "command": "echo build-wordpress"
+        },
+        "run": {
+          "command": "echo run-wordpress"
+        }
+      },
+      "lovable": {
+        "type": "lovable",
+        "project_root": "site/",
+        "build": {
+          "command": "echo build-lovable"
+        },
+        "run": {
+          "command": "echo run-lovable"
+        }
+      },
+      "react": {
+        "type": "react",
+        "project_root": "app/",
+        "build": {
+          "command": "echo build-react"
+        },
+        "run": {
+          "command": "echo run-react"
+        }
+      },
+      "nextjs": {
+        "type": "nextjs",
+        "project_root": "app/",
+        "build": {
+          "command": "echo build-nextjs"
+        },
+        "run": {
+          "command": "echo run-nextjs"
+        }
+      },
+      "static": {
+        "type": "static",
+        "public_dir": "public/",
+        "build": {
+          "command": "echo build-static"
+        }
+      },
+      "php": {
+        "type": "php",
+        "public_dir": "public/",
+        "run": {
+          "command": "echo run-php"
+        }
+      },
+      "generic_git": {
+        "type": "generic_git",
+        "project_root": ".",
+        "build": {
+          "command": "echo build-generic"
+        }
+      },
+      "custom": {
+        "type": "custom",
+        "project_root": ".",
+        "notes": "Provide custom adapter behavior in code"
+      }
     }
+  },
+  "canonical_url": "https://www.example-site.test",
+  "allowed_paths": [
+    "src/",
+    "public/",
+    "wp-content/",
+    "themes/",
+    "plugins/",
+    "assets/"
+  ],
+  "denied_paths": [
+    ".git/",
+    ".github/",
+    "node_modules/",
+    "vendor/",
+    "build/",
+    "dist/"
+  ],
+  "environment": {
+    "name": "example-environment",
+    "runtime": {
+      "host": "<RUNTIME_HOST>",
+      "port": "<RUNTIME_PORT>"
+    },
+    "provider": {
+      "name": "<PROVIDER>",
+      "base_url": "<PROVIDER_BASE_URL>",
+      "model": "<PROVIDER_MODEL>"
+    },
+    "notes": "External runtime configuration is supplied separately"
+  },
+  "seo_enabled": true,
+  "performance_monitoring_enabled": true,
+  "availability_monitoring_enabled": true,
+  "security_monitoring_enabled": true,
+  "accessibility_monitoring_enabled": true,
+  "ecommerce_enabled": false,
+  "autonomous_low_risk_fixes": true,
+  "autonomous_medium_risk_fixes": false,
+  "memory_enabled": true,
+  "metadata": {
+    "description": "Portable example project template for cross-provider recovery and migration.",
+    "maintainer": "Example Organization",
+    "labels": [
+      "portable",
+      "example"
+    ],
+    "site_profiles_supported": [
+      "wordpress",
+      "lovable",
+      "react",
+      "nextjs",
+      "static",
+      "php",
+      "generic_git",
+      "custom"
+    ]
   }
 }
