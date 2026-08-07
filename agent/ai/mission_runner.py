@@ -1,330 +1,514 @@
 from __future__ import annotations
 
+import argparse
 import json
-import logging
-import shutil
-import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone
+import subprocess
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Any
+
+from ai.code_generator import CodeGenerator
+from core.logger import build_logger
+from providers.openai.provider import openai_provider
+from services.planner import Planner
+from services.repository_scanner import RepositoryScanner
 
 
-logger = logging.getLogger(__name__)
+log = build_logger()
+
+AGENT_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = AGENT_ROOT.parent
+MISSIONS_ROOT = AGENT_ROOT / "missions"
 
 
-# NOTE:
-# This module augments Mission Runner with a safe diagnostic artifact-capture
-# mechanism. The capture occurs only if post-write repository validation fails
-# (e.g., py_compile, unittest, etc.). It must not capture any data if earlier
-# safety validations fail (generated-path allowlist, forbidden-content, secret
-# detection, or generation parsing). The implemented logic ensures copies are
-# created strictly after files are written and before any rollback/cleanup.
-#
-# To preserve compatibility with existing Mission Runner behavior, this module
-# adds a set of small, private utilities and wraps post-write validation with a
-# narrow try/except. It does not change mission success semantics, git/branch
-# behavior, push rules, or validation logic.
+class MissionError(RuntimeError):
+    """Raised when an autonomous mission cannot be completed safely."""
 
 
-# ------------------------------
-# Internal utilities (safe)
-# ------------------------------
+def run_git(
+    *args: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run a Git command from the repository root."""
 
-_SAFE_ARTIFACTS_BASE = Path("/tmp/mitigate-ai-failed-validation")
-
-
-def _utc_now_iso_basic() -> str:
-    # e.g., 20260807T160000Z or with microseconds for uniqueness
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-
-
-def _sanitize_name(name: str) -> str:
-    # Only allow alphanumerics, dash, underscore. Convert spaces to underscore.
-    # Lowercase for stability.
-    safe = []
-    for ch in (name or "").replace(" ", "_"):
-        if ch.isalnum() or ch in ("-", "_"):
-            safe.append(ch)
-        else:
-            safe.append("-")
-    s = "".join(safe).strip("-_")
-    return s.lower() or "mission"
+    return subprocess.run(
+        ["git", *args],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=check,
+    )
 
 
-def _repo_root_from_self(obj: object) -> Path:
-    # Try common attribute names; fallback to current working directory.
-    candidates = [
-        getattr(obj, "repo_root", None),
-        getattr(obj, "repo_dir", None),
-        getattr(obj, "repository_root", None),
-        getattr(obj, "project_root", None),
-        getattr(obj, "root", None),
-    ]
-    for c in candidates:
-        if isinstance(c, (str, Path)):
-            p = Path(c)
-            if p.exists() and p.is_dir():
-                return p.resolve()
-    return Path.cwd().resolve()
+def require_clean_repository() -> None:
+    """Stop when uncommitted repository changes are present."""
+
+    result = run_git("status", "--porcelain")
+
+    if result.stdout.strip():
+        raise MissionError(
+            "Repository is not clean. Commit or restore changes first."
+        )
 
 
-def _mission_name_from_self(obj: object) -> str:
-    # Try various safe sources for mission name
-    if hasattr(obj, "mission_name") and isinstance(getattr(obj, "mission_name"), str):
-        return getattr(obj, "mission_name")
-    if hasattr(obj, "name") and isinstance(getattr(obj, "name"), str):
-        return getattr(obj, "name")
-    # mission attribute with name
-    mission = getattr(obj, "mission", None)
-    if mission is not None:
-        n = getattr(mission, "name", None)
-        if isinstance(n, str):
-            return n
-    return "mission"
+def require_main_branch() -> None:
+    """Require missions to start from the main branch."""
+
+    result = run_git("branch", "--show-current")
+    branch = result.stdout.strip()
+
+    if branch != "main":
+        raise MissionError(
+            f"Mission must start from main; current branch is {branch!r}."
+        )
 
 
-def _snapshot_files(repo_root: Path) -> dict[str, Tuple[float, int]]:
-    # Return a mapping of relative posix path -> (mtime, size)
-    # Ignore .git and __pycache__ for stability/safety.
-    result: dict[str, Tuple[float, int]] = {}
-    ignore_dirs = {".git", "__pycache__"}
-    for p in repo_root.rglob("*"):
-        try:
-            if p.is_dir():
-                # skip ignored dirs
-                name = p.name
-                if name in ignore_dirs:
-                    # Prune traversal for ignored directories by skipping children
-                    # rglob doesn't let us prune easily, but cheap check below avoids adding files later
-                    pass
-                continue
-            if not p.is_file():
-                continue
-            # Skip files under ignored directories
-            parts = p.relative_to(repo_root).parts
-            if any(part in ignore_dirs for part in parts):
-                continue
-            # Skip bytecode files
-            if p.suffix in (".pyc", ".pyo"):
-                continue
-            try:
-                stat = p.stat()
-            except OSError:
-                continue
-            rel = p.relative_to(repo_root).as_posix()
-            result[rel] = (stat.st_mtime, stat.st_size)
-        except Exception:
-            # Best-effort; ignore any edge filesystem issues
+def load_mission(mission_name: str) -> tuple[Path, str]:
+    """Load a mission Markdown file safely."""
+
+    filename = (
+        mission_name
+        if mission_name.endswith(".md")
+        else f"{mission_name}.md"
+    )
+
+    mission_path = (MISSIONS_ROOT / filename).resolve()
+
+    if MISSIONS_ROOT.resolve() not in mission_path.parents:
+        raise MissionError("Mission path escapes the missions directory.")
+
+    if not mission_path.is_file():
+        raise MissionError(f"Mission not found: {mission_path}")
+
+    content = mission_path.read_text(encoding="utf-8").strip()
+
+    if not content:
+        raise MissionError("Mission file is empty.")
+
+    return mission_path, content
+
+
+def extract_deliverables(mission: str) -> set[str]:
+    """
+    Extract repository-relative deliverables from the mission.
+
+    Deliverables must appear after the 'Deliverables' heading.
+    """
+
+    deliverables: set[str] = set()
+    in_deliverables = False
+
+    for raw_line in mission.splitlines():
+        line = raw_line.strip()
+        normalized = line.lstrip("#").strip().lower()
+
+        if normalized == "deliverables":
+            in_deliverables = True
             continue
-    return result
+
+        if not in_deliverables:
+            continue
+
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            break
+
+        candidate = line.lstrip("-*0123456789. ").strip()
+
+        if not candidate:
+            continue
+
+        if not candidate.startswith("agent/"):
+            continue
+
+        if candidate.startswith("/") or ".." in Path(candidate).parts:
+            raise MissionError(
+                f"Unsafe deliverable path: {candidate}"
+            )
+
+        deliverables.add(candidate)
+
+    if not deliverables:
+        raise MissionError(
+            "No valid agent/ deliverables were found in the mission."
+        )
+
+    return deliverables
 
 
-def _detect_written_or_modified(before: dict[str, Tuple[float, int]], after: dict[str, Tuple[float, int]]) -> List[str]:
-    changed: List[str] = []
-    for rel, meta in after.items():
-        b = before.get(rel)
-        if b is None:
-            changed.append(rel)
-        else:
-            if meta != b:
-                changed.append(rel)
-    return sorted(changed)
+def create_branch(mission_path: Path) -> str:
+    """Create an isolated autonomous-development branch."""
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    mission_slug = mission_path.stem.replace("_", "-")
+    branch = f"agent/mission-{mission_slug}-{timestamp}"
+
+    run_git("switch", "-c", branch)
+
+    log.info("Mission branch created: %s", branch)
+
+    return branch
 
 
-def _ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
+def build_generation_plan(
+    mission_path: Path,
+    mission: str,
+    deliverables: set[str],
+):
+    """Create an execution plan enriched with mission information."""
 
+    planner = Planner()
 
-def _write_manifest(dest_dir: Path, *, mission_name: str, timestamp: str, generated_paths: Sequence[str], validation_stage: str, exc: BaseException) -> None:
-    manifest = {
-        "mission_name": mission_name,
-        "captured_at": timestamp,
-        "generated_paths": list(generated_paths),
-        "validation_stage": validation_stage,
-        "exception_class": exc.__class__.__name__,
-        "failure_category": "post_write_validation_failed",
+    plan = planner.create_plan(
+        f"Implement autonomous mission: {mission_path.stem}\n\n"
+        f"{mission}"
+    )
+
+    plan.title = f"Mission: {mission_path.stem}"
+    plan.description = mission
+    plan.estimated_files = sorted(deliverables)
+    plan.metadata["mission_file"] = str(
+        mission_path.relative_to(REPOSITORY_ROOT)
+    )
+    plan.metadata["allowed_deliverables"] = sorted(deliverables)
+
+    plan.metadata["testing_policy"] = {
+        "framework": "unittest",
+        "rules": [
+            "Use Python standard library unittest only.",
+            "Never import or use pytest.",
+            "Never add new testing dependencies.",
+            "Never modify requirements.txt.",
+            "Never suggest pip install commands.",
+            "All tests must be compatible with unittest discovery.",
+        ],
     }
-    # Do not include full exception text or any sensitive payloads.
-    with (dest_dir / "manifest.json").open("w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, sort_keys=True)
+
+    return plan
 
 
-def _copy_artifacts(repo_root: Path, dest_dir: Path, rel_paths: Iterable[str]) -> None:
-    for rel in rel_paths:
-        # guard against traversal
-        rel_path = Path(rel)
-        if rel_path.is_absolute() or ".." in rel_path.parts:
-            # Skip unsafe path
-            continue
-        src = (repo_root / rel_path).resolve()
-        try:
-            # Ensure src is within repo_root
-            src.relative_to(repo_root)
-        except Exception:
-            continue
-        if not src.exists() or not src.is_file():
-            continue
-        dst = dest_dir / rel_path
-        _ensure_dir(dst.parent)
-        try:
-            shutil.copy2(src, dst)
-        except Exception:
-            # Best-effort copy; continue with others
-            continue
+def parse_generation(content: str) -> dict[str, Any]:
+    """Parse the AI JSON response."""
+
+    cleaned = content.strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+
+        if len(lines) >= 3:
+            cleaned = "\n".join(lines[1:-1]).strip()
+
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise MissionError(
+            f"AI response was not valid JSON: {exc}"
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise MissionError("AI response root must be an object.")
+
+    files = data.get("files")
+
+    if not isinstance(files, list) or not files:
+        raise MissionError(
+            "AI response must contain a non-empty files list."
+        )
+
+    return data
 
 
-# ------------------------------
-# Artifact capture hook
-# ------------------------------
+def validate_generated_file(
+    entry: dict[str, Any],
+    deliverables: set[str],
+) -> tuple[Path, str]:
+    """Validate one generated file against the mission allowlist."""
 
-class _ArtifactCaptureSupport:
-    """
-    Mixin-like helper providing artifact capture around post-write validation.
+    relative = entry.get("path")
+    content = entry.get("content")
 
-    This class is not meant to be instantiated directly. The existing Mission
-    Runner implementation can opt-in by delegating to these helpers or by using
-    the patching utilities below to wrap methods dynamically.
-    """
+    if not isinstance(relative, str):
+        raise MissionError("Generated file path must be a string.")
 
-    # These attributes are used if the hosting runner sets them during writes.
-    _artifact_repo_root: Optional[str] = None
-    _artifact_written_files: Optional[List[str]] = None
-    _artifact_mission_name: Optional[str] = None
+    if relative not in deliverables:
+        raise MissionError(
+            f"Generated path is outside the allowlist: {relative}"
+        )
 
-    def _artifact_set_repo_root_if_missing(self) -> Path:
-        if not getattr(self, "_artifact_repo_root", None):
-            setattr(self, "_artifact_repo_root", str(_repo_root_from_self(self)))
-        return Path(str(getattr(self, "_artifact_repo_root"))).resolve()
+    if not isinstance(content, str) or not content.strip():
+        raise MissionError(f"Generated file is empty: {relative}")
 
-    def _artifact_capture_on_validate_failure(self, *, stage: str, exc: BaseException) -> Optional[Path]:
-        try:
-            repo_root = self._artifact_set_repo_root_if_missing()
-            mission_name = getattr(self, "_artifact_mission_name", None) or _mission_name_from_self(self)
-            written = getattr(self, "_artifact_written_files", None)
-            if not written:
-                # Nothing to preserve; do not create any directories.
-                return None
+    destination = (REPOSITORY_ROOT / relative).resolve()
 
-            safe_name = _sanitize_name(mission_name)
-            ts = _utc_now_iso_basic()
-            dest_dir = (_SAFE_ARTIFACTS_BASE / f"{safe_name}-{ts}").resolve()
-            # Ensure artifacts remain outside repository root
-            try:
-                dest_dir.relative_to(repo_root)
-                # If we got here, dest would be inside repo; abort for safety.
-                return None
-            except Exception:
-                pass
+    if REPOSITORY_ROOT.resolve() not in destination.parents:
+        raise MissionError(
+            f"Generated path escapes repository: {relative}"
+        )
 
-            _ensure_dir(dest_dir)
-            _copy_artifacts(repo_root, dest_dir, written)
-            _write_manifest(dest_dir, mission_name=mission_name, timestamp=ts, generated_paths=written, validation_stage=stage, exc=exc)
+    forbidden_fragments = (
+        "OPENAI_API_KEY=",
+        "sk-proj-",
+        "BEGIN PRIVATE KEY",
+        "os.system(",
+        "subprocess.Popen(",
+        "eval(",
+        "exec(",
+    )
 
-            logger.error("Failed validation artifacts preserved at: %s", str(dest_dir))
-            return dest_dir
-        except Exception:
-            # Never let diagnostics break mission flow; swallow errors silently.
-            return None
+    for fragment in forbidden_fragments:
+        if fragment in content:
+            raise MissionError(
+                f"Forbidden content in {relative}: {fragment}"
+            )
+
+    return destination, content
 
 
-# ------------------------------
-# Dynamic patching utilities
-# ------------------------------
+def write_generated_files(
+    data: dict[str, Any],
+    deliverables: set[str],
+) -> list[Path]:
+    """Write generated files atomically."""
 
-def enable_failed_validation_artifact_capture(cls: type) -> type:
-    """
-    Dynamically wrap an existing Mission Runner class to capture generated files
-    if post-write validation fails. This preserves semantics by:
-      - Recording a before/after snapshot around write_generated_files
-      - On validate_generated_files exception, copying changed files to /tmp
-      - Writing a minimal manifest.json with safe metadata
+    generated_entries = data["files"]
+    generated_paths: set[str] = set()
+    written: list[Path] = []
 
-    The wrapper is applied only if the class exposes write_generated_files and
-    validate_generated_files call sites. Any errors in the wrapper are kept
-    silent to avoid regression in unrelated flows.
-    """
+    for entry in generated_entries:
+        if not isinstance(entry, dict):
+            raise MissionError(
+                "Every generated file entry must be an object."
+            )
 
-    # If already wrapped, do nothing
-    if getattr(cls, "_artifact_capture_wrapped", False):
-        return cls
+        destination, content = validate_generated_file(
+            entry,
+            deliverables,
+        )
 
-    # Attach support mixin behavior to instances via composition
-    def _get_support(self) -> _ArtifactCaptureSupport:
-        sup = getattr(self, "_artifact_capture_support", None)
-        if not isinstance(sup, _ArtifactCaptureSupport):
-            sup = _ArtifactCaptureSupport()
-            # Bind basic attrs if discoverable
-            try:
-                sup._artifact_repo_root = str(_repo_root_from_self(self))
-                sup._artifact_mission_name = _mission_name_from_self(self)
-            except Exception:
-                pass
-            setattr(self, "_artifact_capture_support", sup)
-        return sup
+        relative = str(destination.relative_to(REPOSITORY_ROOT))
 
-    # Wrap write_generated_files to compute delta of written/modified files
-    if hasattr(cls, "write_generated_files") and callable(getattr(cls, "write_generated_files")):
-        orig_write = getattr(cls, "write_generated_files")
+        if relative in generated_paths:
+            raise MissionError(
+                f"Duplicate generated file: {relative}"
+            )
 
-        def write_wrapper(self, *args, **kwargs):
-            try:
-                support = _get_support(self)
-                repo_root = Path(getattr(support, "_artifact_repo_root") or _repo_root_from_self(self)).resolve()
-                before = _snapshot_files(repo_root)
-                result = orig_write(self, *args, **kwargs)
-                after = _snapshot_files(repo_root)
-                changed = _detect_written_or_modified(before, after)
-                setattr(support, "_artifact_written_files", changed)
-                # Persist mission name if available
-                try:
-                    setattr(support, "_artifact_mission_name", _mission_name_from_self(self))
-                except Exception:
-                    pass
-                return result
-            except Exception:
-                # If write fails, don't interfere; re-raise original exception
-                raise
+        generated_paths.add(relative)
 
-        setattr(cls, "write_generated_files", write_wrapper)
+        destination.parent.mkdir(parents=True, exist_ok=True)
 
-    # Wrap validate_generated_files to preserve artifacts upon exception
-    if hasattr(cls, "validate_generated_files") and callable(getattr(cls, "validate_generated_files")):
-        orig_validate = getattr(cls, "validate_generated_files")
+        temporary = destination.with_suffix(
+            destination.suffix + ".tmp"
+        )
 
-        def validate_wrapper(self, *args, **kwargs):
-            try:
-                return orig_validate(self, *args, **kwargs)
-            except Exception as e:  # Post-write validation failed
-                try:
-                    support = _get_support(self)
-                    # Only capture if there are written files recorded
-                    if getattr(support, "_artifact_written_files", None):
-                        support._artifact_capture_on_validate_failure(stage="post_write_validation", exc=e)
-                except Exception:
-                    # Best-effort capture; ignore failures
-                    pass
-                # Re-raise to allow upstream rollback/cleanup
-                raise
+        temporary.write_text(
+            content.rstrip() + "\n",
+            encoding="utf-8",
+        )
 
-        setattr(cls, "validate_generated_files", validate_wrapper)
+        temporary.replace(destination)
 
-    # Mark as wrapped
-    setattr(cls, "_artifact_capture_wrapped", True)
+        written.append(destination)
 
-    return cls
+        log.info("Generated file written: %s", relative)
+
+    missing = deliverables - generated_paths
+
+    if missing:
+        raise MissionError(
+            f"AI did not generate all deliverables: {sorted(missing)}"
+        )
+
+    return written
 
 
-# Attempt best-effort auto-enable if a MissionRunner class is present in this module.
-# This keeps backwards compatibility: if the existing implementation defines
-# MissionRunner here, we dynamically enhance it without altering its logic.
-try:
-    # If MissionRunner already defined in this module, wrap it.
-    # If not, this no-op and external code can explicitly call enable_failed_validation_artifact_capture.
-    from typing import TYPE_CHECKING
+def validate_generated_files(files: list[Path]) -> None:
+    """Compile generated Python and run the complete unit-test suite."""
 
-    if "MissionRunner" in globals() and not TYPE_CHECKING:
-        MissionRunner = enable_failed_validation_artifact_capture(globals()["MissionRunner"])  # type: ignore[name-defined]
-except Exception:
-    # Never break import on enhancement failure.
-    pass
+    python_files = [
+        str(path)
+        for path in files
+        if path.suffix == ".py"
+    ]
+
+    if python_files:
+        subprocess.run(
+            [sys.executable, "-m", "py_compile", *python_files],
+            cwd=REPOSITORY_ROOT,
+            check=True,
+        )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "agent/tests",
+            "-p",
+            "test_*.py",
+            "-v",
+        ],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+    )
+
+
+def commit_and_push(
+    branch: str,
+    mission_path: Path,
+    deliverables: set[str],
+    summary: str,
+) -> None:
+    """Commit successful mission output and push its branch."""
+
+    tracked_paths = sorted(
+        deliverables
+        | {
+            str(mission_path.relative_to(REPOSITORY_ROOT)),
+        }
+    )
+
+    run_git("add", *tracked_paths)
+
+    diff_result = run_git(
+        "diff",
+        "--cached",
+        "--quiet",
+        check=False,
+    )
+
+    if diff_result.returncode == 0:
+        raise MissionError("Mission produced no Git changes.")
+
+    message = f"Agent mission: {mission_path.stem}"
+
+    if summary:
+        message += f"\n\n{summary[:500]}"
+
+    run_git("commit", "-m", message)
+    run_git("push", "-u", "origin", branch)
+
+
+def recover_failed_mission() -> None:
+    """Discard uncommitted mission output after failure."""
+
+    run_git("reset", "--hard", "HEAD", check=False)
+    run_git("clean", "-fd", "--", "agent", check=False)
+
+
+def run_mission(mission_name: str) -> int:
+    """Execute one autonomous development mission."""
+
+    require_clean_repository()
+    require_main_branch()
+
+    mission_path, mission = load_mission(mission_name)
+    deliverables = extract_deliverables(mission)
+
+    if not openai_provider.is_available():
+        raise MissionError("OpenAI provider is unavailable.")
+
+    branch = create_branch(mission_path)
+
+    try:
+        scanner = RepositoryScanner(REPOSITORY_ROOT)
+        repository_index = scanner.scan()
+
+        plan = build_generation_plan(
+            mission_path,
+            mission,
+            deliverables,
+        )
+
+        generator = CodeGenerator(
+            ai_provider=openai_provider,
+        )
+
+        result = generator.generate(
+            plan,
+            repository_index,
+            temperature=0.1,
+            max_tokens=20000,
+            request_metadata={
+                "mission": mission,
+                "deliverables": sorted(deliverables),
+            },
+        )
+
+        if not result.success:
+            raise MissionError(
+                f"AI generation failed: {result.error}"
+            )
+
+        data = parse_generation(result.content)
+
+        written = write_generated_files(
+            data,
+            deliverables,
+        )
+
+        validate_generated_files(written)
+
+        summary = str(data.get("summary", "")).strip()
+
+        commit_and_push(
+            branch,
+            mission_path,
+            deliverables,
+            summary,
+        )
+
+        print()
+        print("MISSION COMPLETED")
+        print(f"Mission: {mission_path.name}")
+        print(f"Branch: {branch}")
+        print("Generated files:")
+
+        for path in written:
+            print(
+                f"  - {path.relative_to(REPOSITORY_ROOT)}"
+            )
+
+        print()
+        print("The branch was pushed to GitHub.")
+        print("It was NOT merged into main.")
+
+        return 0
+
+    except Exception:
+        log.exception(
+            "Mission failed: %s",
+            mission_path.name,
+        )
+
+        recover_failed_mission()
+        raise
+
+
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run a MITIGATE AI development mission."
+    )
+
+    parser.add_argument(
+        "mission",
+        help=(
+            "Mission filename or name, for example: "
+            "patch_engine or patch_engine.md"
+        ),
+    )
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_arguments()
+    return run_mission(args.mission)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
