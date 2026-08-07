@@ -23,5 +23,15 @@
     "php",
     "generic_git",
     "custom"
-  ]
+  ],
+  "cms_type": "<CMS_TYPE>",
+  "canonical_url": "<CANONICAL_URL>",
+  "seo_enabled": true,
+  "performance_monitoring_enabled": true,
+  "availability_monitoring_enabled": true,
+  "security_monitoring_enabled": true,
+  "accessibility_monitoring_enabled": true,
+  "ecommerce_enabled": false,
+  "autonomous_low_risk_fixes": true,
+  "autonomous_medium_risk_fixes": false
 }

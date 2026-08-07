@@ -34,3 +34,39 @@ Adapter examples
 - custom
 
 Refer to the project template for supported site types and to the portable bootstrap for repository structure validation.
+
+## Source of Truth
+
+The Git repository is the portable source of truth for all non-secret application, bootstrap, recovery, mission, adapter, memory-schema, and documentation assets.
+
+## Clean Server
+
+A clean server can reconstruct the platform from the repository plus externally supplied runtime configuration and protected values, without source-code rewriting.
+
+## Provider Setup
+
+Provider setup is performed through provider-neutral configuration and adapters. Provider selection and protected access configuration remain external to the portable core.
+
+## Health
+
+After recovery or migration, application health must be verified before production use. Health validation should confirm runtime readiness, required files, configuration availability, and service behavior.
+
+## Systemd
+
+Where systemd is used, service unit templates should reference portable repository paths and external runtime configuration. Service activation remains a separate operational step.
+
+## Server Migration
+
+Server migration should use the Git repository as the source of truth, restore safe project memory and handoff data, then supply environment-specific runtime configuration externally on the destination server.
+
+## Provider Migration
+
+Provider migration must not require rewriting the autonomous core. Provider adapters and external provider configuration allow switching providers while preserving project memory and operational continuity.
+
+## Rollback
+
+Rollback should use a known-good Git revision, compatible project memory state, and previously validated runtime configuration. Production rollback must be followed by health validation.
+
+## Security Model
+
+The security model separates portable non-secret repository assets from protected runtime configuration. Sensitive values remain external to Git, restore paths are validated, project isolation is preserved, and recovery does not require direct network, Git, or deployment execution inside the bootstrap core.
