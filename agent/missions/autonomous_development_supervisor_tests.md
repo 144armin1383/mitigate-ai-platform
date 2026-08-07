@@ -465,3 +465,28 @@ ApprovalDecision tests must validate its dataclass structure and immutable appro
 Do not change the production implementation merely to satisfy an incorrect enum assumption.
 
 All existing and newly generated unittest tests must pass.
+
+Frozen Dataclass Test Clarification
+
+ApprovalDecision is intentionally declared with:
+
+@dataclass(frozen=True, slots=True)
+
+Tests for immutability must mutate an existing declared dataclass field.
+
+For example, validate that assigning to an existing field such as decision_id raises dataclasses.FrozenInstanceError.
+
+Do not test immutability by adding an undeclared attribute with setattr(instance, "new_field", ...).
+
+With frozen=True and slots=True, assigning an undeclared attribute may raise TypeError depending on Python internals, and that is not a valid test of frozen dataclass semantics.
+
+Tests must distinguish:
+
+- immutability of declared fields
+- rejection of undeclared slot attributes
+
+Both may be tested separately, but the frozen-dataclass assertion must use an existing declared field.
+
+Do not modify the production ApprovalDecision implementation to satisfy an invalid setattr-on-new-field assumption.
+
+All existing and newly generated unittest tests must pass.
