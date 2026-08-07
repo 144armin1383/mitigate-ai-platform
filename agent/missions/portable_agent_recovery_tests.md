@@ -511,3 +511,42 @@ Security tests must validate key-name redaction and secret exclusion using safe 
 Do not weaken secret-detection expectations.
 Do not modify production secret-redaction logic merely to satisfy the test suite.
 All existing and newly generated unittest tests must pass.
+
+Mission Runner Secret-Pattern Compatibility Contract
+
+The generated test source itself must pass Mission Runner forbidden-content validation before any tests can run.
+
+Therefore:
+
+- Do not generate PEM-format fixtures of any kind.
+- Do not generate private-key headers or footers.
+- Do not generate certificate-key fixtures.
+- Do not generate realistic authentication material.
+- Do not generate realistic encoded credentials.
+- Do not test PEM parsing or PEM detection in this mission.
+- Do not include forbidden credential-marker sequences anywhere in generated Python source, including strings, comments, docstrings, assertions, fixture data, expected values, or test names.
+
+Secret-exclusion tests must use only neutral synthetic values such as:
+
+- "<SENSITIVE_VALUE>"
+- "<PROTECTED_VALUE>"
+- "<EXTERNAL_VALUE>"
+- "<PLACEHOLDER_VALUE>"
+
+When testing sensitive key names, use ordinary dictionary keys supported by production redaction logic with neutral placeholder values.
+
+Do not construct forbidden strings dynamically from fragments.
+Do not store realistic secret formats even temporarily.
+Do not reproduce Mission Runner forbidden-content examples in generated source.
+
+For project-template and environment-template safety tests, inspect whether credential-like field names or unsafe operational values are present without introducing realistic credential payloads.
+
+This requirement applies to the entire generated file:
+
+agent/tests/test_portable_agent_recovery.py
+
+The generated test file must pass Mission Runner content validation before unittest execution.
+
+Do not modify production code to work around generated-test forbidden content.
+
+All existing and newly generated unittest tests must pass.
