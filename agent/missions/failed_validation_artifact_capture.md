@@ -145,6 +145,6 @@ Regression Requirement
 
 All existing unittest tests must pass.
 
-Deliverable
+Deliverables
 
 - agent/ai/mission_runner.py
