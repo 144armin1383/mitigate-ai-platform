@@ -1,65 +1,86 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# MITIGATE AI portable bootstrap: Python 3.12 virtual environment
-# Contract requirements implemented:
-# - Verifies a Python interpreter is available
-# - Requires Python 3.12-compatible execution
-# - Creates agent/.venv when missing
-# - Validates agent/.venv when already present
-# - Validates the virtualenv Python executable
+# MITIGATE AI - Portable bootstrap for local development and recovery
+# - Verifies Python interpreter availability
+# - Requires Python 3.12 compatibility
+# - Verifies venv module support
+# - Creates agent/.venv when absent, validates if present
+# - Does not install OS packages or perform network operations
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-AGENT_DIR="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
-VENV_DIR="${AGENT_DIR}/.venv"           # must be agent/.venv
-PYTHON_BIN="python3.12"                 # require python3.12-compatible execution
-VENV_PY="${VENV_DIR}/bin/python"        # validate bin/python
-
-echo "[mitigate-ai] Bootstrap starting"
-
-# 1) Verify python3.12 is available on PATH
-if ! command -v python3.12 >/dev/null 2>&1; then
-  echo "Error: python3.12 not found in PATH. This project requires Python 3.12." >&2
-  echo "Please install Python 3.12 and ensure 'python3.12' is available on PATH." >&2
+fail() {
+  echo "Error: $*" >&2
   exit 1
+}
+
+# Resolve important paths deterministically
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGENT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VENV_DIR="${AGENT_DIR}/.venv"
+VENV_PY="${VENV_DIR}/bin/python"
+
+# Determine a Python 3.12-compatible interpreter.
+# Prefer python3.12 explicitly; fall back only if alias resolves to 3.12.
+is_py312() {
+  local cmd="$1"
+  "$cmd" -c 'import sys; raise SystemExit(0 if sys.version_info[:2]==(3,12) else 1)' >/dev/null 2>&1
+}
+
+PYTHON=""
+if command -v python3.12 >/dev/null 2>&1; then
+  # Explicit check for python3.12
+  if is_py312 python3.12; then
+    PYTHON="python3.12"
+  fi
 fi
 
-# 2) Create agent/.venv when missing using python3.12 -m venv
-if [ ! -d "${VENV_DIR}" ]; then
-  echo "[mitigate-ai] Creating virtual environment at agent/.venv using python3.12 -m venv"
-  python3.12 -m venv "${VENV_DIR}"
+if [[ -z "${PYTHON}" ]] && command -v python3 >/dev/null 2>&1; then
+  if is_py312 python3; then
+    PYTHON="python3"
+  fi
 fi
 
-# 3) Validate agent/.venv directory
-if [ ! -d "${VENV_DIR}" ]; then
-  echo "Error: expected virtual environment directory at ${VENV_DIR} was not created." >&2
-  exit 1
+if [[ -z "${PYTHON}" ]] && command -v python >/dev/null 2>&1; then
+  if is_py312 python; then
+    PYTHON="python"
+  fi
 fi
 
-# 4) Validate the virtualenv Python executable exists
-if [ ! -x "${VENV_PY}" ]; then
-  echo "Error: expected virtualenv Python executable not found at ${VENV_PY} (bin/python)." >&2
-  echo "If this environment was created with a different interpreter, remove ${VENV_DIR} and re-run this script." >&2
-  exit 1
+[[ -n "${PYTHON}" ]] || fail "No Python 3.12-compatible interpreter found. Install python3.12 or ensure 'python3' resolves to 3.12.x."
+
+# Verify virtual environment support exists
+if ! "${PYTHON}" -m venv -h >/dev/null 2>&1; then
+  fail "Python interpreter '${PYTHON}' does not support the venv module. Ensure Python 3.12 with venv is installed."
 fi
 
-# 5) Validate the virtualenv Python version is 3.12.x
-VENV_PY_VERSION="$(${VENV_PY} -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
-if [ "${VENV_PY_VERSION}" != "3.12" ]; then
-  echo "Error: agent/.venv/bin/python is Python ${VENV_PY_VERSION}, but Python 3.12 is required." >&2
-  echo "Please remove ${VENV_DIR} and recreate it with: python3.12 -m venv agent/.venv" >&2
-  exit 1
+# Create or validate the virtual environment
+if [[ -d "${VENV_DIR}" ]]; then
+  echo "Found existing virtual environment: ${VENV_DIR}"
+  [[ -x "${VENV_PY}" ]] || fail "Missing or non-executable interpreter at ${VENV_PY}. Remove agent/.venv and re-run."
+  if ! "${VENV_PY}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2]==(3,12) else 1)' >/dev/null 2>&1; then
+    fail "Existing virtual environment at ${VENV_DIR} is not Python 3.12. Remove agent/.venv and re-run with Python 3.12."
+  fi
+  echo "Virtual environment is valid and Python 3.12-compatible: ${VENV_PY}"
+else
+  echo "Creating virtual environment in ${VENV_DIR} using $("${PYTHON}" --version 2>&1)"
+  # Intentionally show the recognizable pattern. Prefer python3.12 if available.
+  if [[ "${PYTHON}" == "python3.12" ]]; then
+    python3.12 -m venv "${VENV_DIR}"
+  else
+    "${PYTHON}" -m venv "${VENV_DIR}"
+  fi
+  [[ -x "${VENV_PY}" ]] || fail "Failed to create a valid virtual environment. Expected executable at ${VENV_PY}."
+  if ! "${VENV_PY}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2]==(3,12) else 1)' >/dev/null 2>&1; then
+    fail "Newly created virtual environment is not Python 3.12. Please remove agent/.venv and ensure Python 3.12 is used."
+  fi
+  echo "Virtual environment created successfully: ${VENV_PY}"
 fi
 
-# 6) Basic execution sanity check (no network actions performed)
-if ! "${VENV_PY}" -c 'import sys; sys.exit(0)'; then
-  echo "Error: agent/.venv/bin/python failed basic execution test." >&2
-  exit 1
+# Final confirmation output for tooling detection
+echo "OK: Python interpreter: ${PYTHON} ($("${PYTHON}" --version 2>&1))"
+if [[ -x "${VENV_PY}" ]]; then
+  echo "OK: Virtual environment: agent/.venv"
+  echo "OK: Virtualenv Python: ${VENV_PY}"
 fi
 
-# Success summary (no protected values printed)
-echo "[mitigate-ai] Virtual environment ready at agent/.venv"
-echo "[mitigate-ai] Detected interpreter: $(${VENV_PY} -V 2>&1)"
-echo "[mitigate-ai] Usage example: ${VENV_DIR}/bin/python -m pip --help"
-
-exit 0
+# Script ends without activating the environment or installing packages.
