@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "protected_core_paths": [
+    "agent/ai/",
+    "agent/runtime/",
+    "agent/api/",
+    "agent/orchestrator/",
+    "agent/autonomy/",
+    "agent/memory/",
+    "agent/bootstrap/",
+    "agent/policies/"
+  ],
+  "canonical_test_paths": [
+    "agent/tests/test_portable_agent_recovery.py"
+  ],
+  "core_maintenance_marker": "CORE_MAINTENANCE_APPROVED",
+  "test_contract_maintenance_marker": "TEST_CONTRACT_MAINTENANCE_APPROVED",
+  "manual_merge_required_for_core_changes": true,
+  "full_suite_required_for_core_changes": true,
+  "recovery_gate_required_for_core_changes": true
+}
