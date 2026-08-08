@@ -8,7 +8,11 @@
     "agent/autonomy/",
     "agent/memory/",
     "agent/bootstrap/",
-    "agent/policies/"
+    "agent/policies/",
+    "agent/core/",
+    "agent/services/",
+    "agent/providers/",
+    "agent/deploy/"
   ],
   "canonical_test_paths": [
     "agent/tests/test_portable_agent_recovery.py"

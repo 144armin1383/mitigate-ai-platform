@@ -6,6 +6,8 @@ from pathlib import Path
 
 from agent.policies import core_protection as cp
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 class TestCoreProtectionPolicy(unittest.TestCase):
     @classmethod
@@ -58,7 +60,7 @@ class TestCoreProtectionPolicy(unittest.TestCase):
         self.assertEqual(d.kind, cp.ProtectionKind.UNPROTECTED)
 
     def test_09_core_marker_permits_protected_core_path(self):
-        mission = f"Feature update. {self.core_marker}"
+        mission = f"Feature update.\n{self.core_marker}\n"
         d = cp.validate_mission_write("agent/ai/engine.py", mission, self.config)
         self.assertTrue(d.allowed)
         self.assertEqual(d.kind, cp.ProtectionKind.PROTECTED_CORE)
@@ -79,7 +81,7 @@ class TestCoreProtectionPolicy(unittest.TestCase):
         self.assertEqual(d.code, "CANONICAL_TEST_LOCKED")
 
     def test_12_both_markers_permit_canonical_test_modification(self):
-        mission = f"Hotfix. {self.core_marker} {self.test_marker}"
+        mission = f"Hotfix.\n{self.core_marker}\n{self.test_marker}\n"
         d = cp.validate_mission_write("agent/tests/test_portable_agent_recovery.py", mission, self.config)
         self.assertTrue(d.allowed)
         self.assertEqual(d.kind, cp.ProtectionKind.CANONICAL_TEST)
@@ -177,3 +179,105 @@ class TestCoreProtectionPolicy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCoreProtectionHardening(unittest.TestCase):
+    def setUp(self):
+        self.config = cp.load_core_lock_manifest(
+            REPO_ROOT / "agent/policies/core_lock_manifest.json"
+        )
+
+    def test_marker_inside_sentence_does_not_authorize_core_change(self):
+        mission = (
+            "This mission does not contain "
+            "CORE_MAINTENANCE_APPROVED authorization."
+        )
+        result = cp.validate_mission_write(
+            "agent/ai/mission_runner.py",
+            mission,
+            self.config,
+        )
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.code, "CORE_PATH_LOCKED")
+
+    def test_exact_core_marker_line_authorizes_core_change(self):
+        mission = (
+            "Mission: approved maintenance\n\n"
+            "CORE_MAINTENANCE_APPROVED\n\n"
+            "Perform approved maintenance."
+        )
+        result = cp.validate_mission_write(
+            "agent/core/example.py",
+            mission,
+            self.config,
+        )
+        self.assertTrue(result.allowed)
+
+    def test_marker_with_extra_text_does_not_authorize(self):
+        mission = "CORE_MAINTENANCE_APPROVED please proceed"
+        result = cp.validate_mission_write(
+            "agent/services/example.py",
+            mission,
+            self.config,
+        )
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.code, "CORE_PATH_LOCKED")
+
+    def test_core_directory_is_protected(self):
+        result = cp.validate_mission_write(
+            "agent/core/example.py",
+            "normal mission",
+            self.config,
+        )
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.code, "CORE_PATH_LOCKED")
+
+    def test_services_directory_is_protected(self):
+        result = cp.validate_mission_write(
+            "agent/services/example.py",
+            "normal mission",
+            self.config,
+        )
+        self.assertFalse(result.allowed)
+
+    def test_providers_directory_is_protected(self):
+        result = cp.validate_mission_write(
+            "agent/providers/example.py",
+            "normal mission",
+            self.config,
+        )
+        self.assertFalse(result.allowed)
+
+    def test_deploy_directory_is_protected(self):
+        result = cp.validate_mission_write(
+            "agent/deploy/example.sh",
+            "normal mission",
+            self.config,
+        )
+        self.assertFalse(result.allowed)
+
+    def test_test_contract_marker_in_prose_does_not_authorize(self):
+        mission = (
+            "CORE_MAINTENANCE_APPROVED\n"
+            "This text mentions TEST_CONTRACT_MAINTENANCE_APPROVED "
+            "but is not an approval line."
+        )
+        result = cp.validate_mission_write(
+            "agent/tests/test_portable_agent_recovery.py",
+            mission,
+            self.config,
+        )
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.code, "CANONICAL_TEST_LOCKED")
+
+    def test_both_exact_marker_lines_authorize_canonical_test(self):
+        mission = (
+            "CORE_MAINTENANCE_APPROVED\n"
+            "TEST_CONTRACT_MAINTENANCE_APPROVED\n"
+        )
+        result = cp.validate_mission_write(
+            "agent/tests/test_portable_agent_recovery.py",
+            mission,
+            self.config,
+        )
+        self.assertTrue(result.allowed)

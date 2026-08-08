@@ -213,12 +213,25 @@ def classify_protected_path(path: str | Path, config: CoreProtectionConfig) -> P
     return ProtectionKind.UNPROTECTED
 
 
+def _has_exact_marker_line(mission_text: str, marker: str) -> bool:
+    return any(
+        line.strip() == marker
+        for line in mission_text.splitlines()
+    )
+
+
 def _has_core_marker(mission_text: str, config: CoreProtectionConfig) -> bool:
-    return config.core_maintenance_marker in mission_text
+    return _has_exact_marker_line(
+        mission_text,
+        config.core_maintenance_marker,
+    )
 
 
 def _has_test_contract_marker(mission_text: str, config: CoreProtectionConfig) -> bool:
-    return config.test_contract_maintenance_marker in mission_text
+    return _has_exact_marker_line(
+        mission_text,
+        config.test_contract_maintenance_marker,
+    )
 
 
 def validate_mission_write(
