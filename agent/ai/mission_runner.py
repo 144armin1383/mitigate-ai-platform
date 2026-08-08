@@ -18,6 +18,13 @@ from policies.core_protection import (
     validate_mission_write,
 )
 
+try:
+    from repair.mission_adapter import MissionRepairAdapter
+except ModuleNotFoundError as exc:
+    if exc.name != "repair":
+        raise
+    from agent.repair.mission_adapter import MissionRepairAdapter
+
 
 log = build_logger()
 
@@ -422,6 +429,194 @@ def recover_failed_mission() -> None:
     run_git("clean", "-fd", "--", "agent", check=False)
 
 
+
+def _validation_failure_category(
+    exc: subprocess.CalledProcessError,
+) -> str:
+    """Classify only safe, repairable generated-code validation failures."""
+
+    command = exc.cmd
+
+    if isinstance(command, (list, tuple)):
+        parts = tuple(str(part) for part in command)
+    else:
+        parts = (str(command),)
+
+    if "py_compile" in parts:
+        return "python-compilation-failure"
+
+    if "unittest" in parts:
+        return "unittest-failure"
+
+    return "generated-validation-failure"
+
+
+def validate_with_self_healing(
+    *,
+    mission_path: Path,
+    mission: str,
+    deliverables: set[str],
+    written: list[Path],
+    repository_index: Any,
+    generator: CodeGenerator,
+) -> list[Path]:
+    """
+    Validate generated mission output and invoke bounded Self-Healing only
+    for subprocess-backed generated-code validation failures.
+
+    MissionRepairAdapter / IntegrationCoordinator remain the sole retry
+    authority.
+    """
+
+    try:
+        validate_generated_files(written)
+        return written
+    except subprocess.CalledProcessError as exc:
+        failure_category = _validation_failure_category(exc)
+
+    current_written = list(written)
+
+    safe_summary = (
+        "Generated mission output failed Python compilation."
+        if failure_category == "python-compilation-failure"
+        else
+        "Generated mission output failed the repository unittest validation."
+        if failure_category == "unittest-failure"
+        else
+        "Generated mission output failed repository validation."
+    )
+
+    def validation_callback() -> bool:
+        validate_generated_files(current_written)
+        return True
+
+    def generation_callback(request: Any) -> dict[str, Any]:
+        repair_description = (
+            f"Repair generated output for mission {mission_path.stem}.\\n"
+            f"Repair attempt: {request.attempt_number}.\\n"
+            f"Failure category: {request.failure_category}.\\n"
+            f"Safe failure summary: {request.failure_summary}.\\n"
+            f"Allowed deliverables: {', '.join(request.allowed_paths)}.\\n"
+            "Modify only the allowed deliverables. "
+            "Do not add files. Do not modify protected Core paths unless they "
+            "are already explicitly present in the original mission deliverables. "
+            "Return the complete corrected deliverable set as the normal "
+            "mission JSON files response."
+        )
+
+        planner = Planner()
+        repair_plan = planner.create_plan(repair_description)
+
+        repair_plan.title = (
+            f"Self-Healing repair: {mission_path.stem} "
+            f"attempt {request.attempt_number}"
+        )
+        repair_plan.description = repair_description
+        repair_plan.estimated_files = sorted(request.allowed_paths)
+
+        repair_plan.metadata["mission_file"] = str(
+            mission_path.relative_to(REPOSITORY_ROOT)
+        )
+        repair_plan.metadata["allowed_deliverables"] = sorted(
+            request.allowed_paths
+        )
+        repair_plan.metadata["self_healing"] = True
+        repair_plan.metadata["repair_attempt"] = request.attempt_number
+        repair_plan.metadata["failure_category"] = request.failure_category
+        repair_plan.metadata["testing_policy"] = {
+            "framework": "unittest",
+            "rules": [
+                "Use Python standard library unittest only.",
+                "Never import or use pytest.",
+                "Never add new testing dependencies.",
+                "Never modify requirements.txt.",
+                "All tests must be compatible with unittest discovery.",
+            ],
+        }
+
+        repair_result = generator.generate(
+            repair_plan,
+            repository_index,
+            temperature=0.1,
+            max_tokens=20000,
+            request_metadata={
+                "self_healing": True,
+                "mission": mission_path.stem,
+                "attempt": request.attempt_number,
+                "failure_category": request.failure_category,
+                "failure_summary": request.failure_summary,
+                "allowed_deliverables": sorted(request.allowed_paths),
+            },
+        )
+
+        if not repair_result.success:
+            return {
+                "success": False,
+                "error": "Repair generation failed.",
+            }
+
+        try:
+            repair_data = parse_generation(repair_result.content)
+        except MissionError:
+            return {
+                "success": False,
+                "error": "Repair response was not valid mission JSON.",
+            }
+
+        return {
+            "success": True,
+            "data": repair_data,
+        }
+
+    def apply_callback(payload: Any) -> bool:
+        nonlocal current_written
+
+        if not isinstance(payload, dict):
+            return False
+
+        repair_data = payload.get("data")
+
+        if not isinstance(repair_data, dict):
+            return False
+
+        current_written = write_generated_files(
+            repair_data,
+            deliverables,
+            mission,
+        )
+
+        return True
+
+    adapter = MissionRepairAdapter(
+        validate_callback=validation_callback,
+        generate_callback=generation_callback,
+        apply_callback=apply_callback,
+    )
+
+    repair_result = adapter.run(
+        mission_name=mission_path.stem,
+        objective=(
+            f"Repair generated validation failure for "
+            f"{mission_path.stem}"
+        ),
+        failure_category=failure_category,
+        failure_summary=safe_summary,
+        allowed_paths=sorted(deliverables),
+        denied_paths=(),
+        validation_required=True,
+    )
+
+    status = str(repair_result.get("status", ""))
+
+    if status != "succeeded":
+        if status == "blocked":
+            raise MissionError("SELF_HEALING_BLOCKED")
+
+        raise MissionError("SELF_HEALING_EXHAUSTED")
+
+    return current_written
+
+
 def run_mission(mission_name: str) -> int:
     """Execute one autonomous development mission."""
 
@@ -474,7 +669,14 @@ def run_mission(mission_name: str) -> int:
             mission,
         )
 
-        validate_generated_files(written)
+        written = validate_with_self_healing(
+            mission_path=mission_path,
+            mission=mission,
+            deliverables=deliverables,
+            written=written,
+            repository_index=repository_index,
+            generator=generator,
+        )
 
         summary = str(data.get("summary", "")).strip()
 
