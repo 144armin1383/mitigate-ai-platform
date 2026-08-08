@@ -5,6 +5,12 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 import copy
 import re
 
+from agent.repair.integration import (
+    IntegrationCoordinator,
+    RepairExecutionResult,
+    ValidationResult,
+)
+
 
 @dataclass(frozen=True)
 class RepairRequest:
@@ -76,149 +82,235 @@ class MissionRepairAdapter:
         policy_blocks: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Execute validation and at most three bounded self-healing repair attempts.
+        Execute the mission repair lifecycle through IntegrationCoordinator.
 
-        Parameters are not mutated. Allowed/denied paths are preserved and not expanded.
-        Exceptions from callbacks are converted to safe failure events with redaction.
+        IntegrationCoordinator is the single authority for:
+        validation, bounded attempts, retry progression, revalidation,
+        blocked state, succeeded state, and exhausted state.
+
+        This method preserves the existing MissionRepairAdapter public result
+        contract while delegating lifecycle control to the coordinator.
         """
-        # Copy inputs to guarantee immutability of caller-provided objects
         original_allowed = list(allowed_paths)
         original_denied = list(denied_paths)
 
-        # Prepare result container
-        result: Dict[str, Any] = {
-            "status": "",
-            "attempts": 0,
-            "initial_validation": {"success": None, "error": None},
-            "history": [],  # one entry per attempt
-            "failures": [],  # flattened failures across stages
-            "blocked_reasons": [],
-        }
-
-        # Run initial validation (exception is a failure event; does not force final failure)
-        initial_success, initial_err = self._call_validation()
-        result["initial_validation"] = {
-            "success": initial_success,
-            "error": self._redact_text(initial_err) if initial_err else None,
-        }
-        if initial_err is not None:
-            result["failures"].append(
-                {
-                    "stage": "validation",
-                    "attempt": 0,
-                    "message": self._redact_text(initial_err),
-                }
-            )
-
-        # If already valid or validation not required, succeed early
-        if (initial_success is True) or (validation_required is False and initial_success is not False):
-            result["status"] = "succeeded"
-            result["attempts"] = 0
-            return self._freeze_result(result)
-
-        # Check safety policy blocks prior to generation/apply
-        blocks = set(str(b) for b in (policy_blocks or ()))
-        blocked_reasons = [b for b in self._POLICY_BLOCKS if b in blocks]
-        if blocked_reasons:
-            # Do not call generation/apply when blocked.
-            result["status"] = "blocked"
-            result["attempts"] = 0
-            result["blocked_reasons"] = blocked_reasons
-            return self._freeze_result(result)
-
-        # Prepare immutable redacted request base fields
-        redacted_objective = self._redact_text(objective)
-        redacted_summary = self._redact_text(failure_summary)
-
-        # Do not expand or mutate paths; store as tuples for immutability
         allowed_tuple = tuple(original_allowed)
         denied_tuple = tuple(original_denied)
 
-        # Attempt up to MAX_ATTEMPTS repairs
-        for attempt in range(1, self.MAX_ATTEMPTS + 1):
-            # Build request (immutable)
+        blocked_reasons = [
+            item
+            for item in self._POLICY_BLOCKS
+            if item in {str(v) for v in (policy_blocks or ())}
+        ]
+
+        result: Dict[str, Any] = {
+            "status": "",
+            "attempts": 0,
+            "initial_validation": {
+                "success": None,
+                "error": None,
+            },
+            "history": [],
+            "failures": [],
+            "blocked_reasons": [],
+        }
+
+        validation_count = 0
+
+        def coordinator_validate() -> ValidationResult:
+            nonlocal validation_count
+
+            success, error = self._call_validation()
+            validation_count += 1
+
+            safe_error = self._redact_text(error) if error else None
+
+            if validation_count == 1:
+                result["initial_validation"] = {
+                    "success": success,
+                    "error": safe_error,
+                }
+            elif result["history"]:
+                result["history"][-1]["validation"] = {
+                    "success": success,
+                    "error": safe_error,
+                }
+
+            if error is not None:
+                result["failures"].append(
+                    {
+                        "stage": "validation",
+                        "attempt": max(0, validation_count - 1),
+                        "message": safe_error,
+                    }
+                )
+
+            if success is True:
+                return ValidationResult(
+                    success=True,
+                    category=None,
+                    summary="validation succeeded",
+                    diagnostic=None,
+                    source=mission_name,
+                )
+
+            if blocked_reasons:
+                reason = blocked_reasons[0]
+                return ValidationResult(
+                    success=False,
+                    category=reason,
+                    summary="blocked by policy or protection",
+                    diagnostic=None,
+                    source=mission_name,
+                    blocking_condition=reason,
+                )
+
+            if validation_required is False and success is not False:
+                return ValidationResult(
+                    success=True,
+                    category=None,
+                    summary="validation not required",
+                    diagnostic=None,
+                    source=mission_name,
+                )
+
+            return ValidationResult(
+                success=False,
+                category=failure_category or "validation-failure",
+                summary=self._redact_text(failure_summary),
+                diagnostic=safe_error,
+                source=mission_name,
+            )
+
+        def coordinator_repair(plan: Any) -> RepairExecutionResult:
             request = RepairRequest(
                 mission_name=mission_name,
-                attempt_number=attempt,
-                objective=redacted_objective,
-                failure_category=failure_category,
-                failure_summary=redacted_summary,
+                attempt_number=int(plan.attempt_number),
+                objective=self._redact_text(objective),
+                failure_category=(
+                    str(plan.failure_category)
+                    if plan.failure_category is not None
+                    else failure_category
+                ),
+                failure_summary=self._redact_text(
+                    plan.failure_summary or failure_summary
+                ),
                 allowed_paths=allowed_tuple,
                 denied_paths=denied_tuple,
                 validation_required=validation_required,
             )
 
-            # Generation step
-            gen_success, gen_payload, gen_err = self._call_generate(request)
-            attempt_rec: Dict[str, Any] = {
-                "attempt": attempt,
+            gen_success, gen_payload, gen_error = self._call_generate(request)
+
+            attempt_record: Dict[str, Any] = {
+                "attempt": int(plan.attempt_number),
                 "generation": {
                     "success": gen_success,
-                    "error": self._redact_text(gen_err) if gen_err else None,
+                    "error": (
+                        self._redact_text(gen_error)
+                        if gen_error
+                        else None
+                    ),
                 },
-                "apply": None,
-                "validation": None,
+                "apply": {
+                    "success": None,
+                    "error": None,
+                },
+                "validation": {
+                    "success": None,
+                    "error": None,
+                },
             }
-            if gen_err is not None:
+
+            result["history"].append(attempt_record)
+
+            if gen_error is not None:
                 result["failures"].append(
                     {
                         "stage": "generation",
-                        "attempt": attempt,
-                        "message": self._redact_text(gen_err),
+                        "attempt": int(plan.attempt_number),
+                        "message": self._redact_text(gen_error),
                     }
                 )
-            result["history"].append(attempt_rec)
 
             if not gen_success:
-                # Proceed to next attempt
-                result["attempts"] = attempt
-                if attempt == self.MAX_ATTEMPTS:
-                    result["status"] = "exhausted"
-                continue
+                return RepairExecutionResult(
+                    success=False,
+                    summary="Repair generation failed",
+                )
 
-            # Apply step
-            app_success, app_err = self._call_apply(gen_payload)
-            attempt_rec["apply"] = {
-                "success": app_success,
-                "error": self._redact_text(app_err) if app_err else None,
+            apply_success, apply_error = self._call_apply(gen_payload)
+
+            attempt_record["apply"] = {
+                "success": apply_success,
+                "error": (
+                    self._redact_text(apply_error)
+                    if apply_error
+                    else None
+                ),
             }
-            if app_err is not None:
+
+            if apply_error is not None:
                 result["failures"].append(
                     {
                         "stage": "apply",
-                        "attempt": attempt,
-                        "message": self._redact_text(app_err),
-                    }
-                )
-            result["attempts"] = attempt
-
-            if not app_success:
-                if attempt == self.MAX_ATTEMPTS:
-                    result["status"] = "exhausted"
-                continue
-
-            # Post-apply validation
-            val_success, val_err = self._call_validation()
-            attempt_rec["validation"] = {
-                "success": val_success,
-                "error": self._redact_text(val_err) if val_err else None,
-            }
-            if val_err is not None:
-                result["failures"].append(
-                    {
-                        "stage": "validation",
-                        "attempt": attempt,
-                        "message": self._redact_text(val_err),
+                        "attempt": int(plan.attempt_number),
+                        "message": self._redact_text(apply_error),
                     }
                 )
 
-            if val_success:
-                result["status"] = "succeeded"
-                return self._freeze_result(result)
+            if not apply_success:
+                return RepairExecutionResult(
+                    success=False,
+                    summary="Repair application failed",
+                )
 
-            # Otherwise continue to next attempt
-            if attempt == self.MAX_ATTEMPTS:
-                result["status"] = "exhausted"
+            return RepairExecutionResult(
+                success=True,
+                summary="repair generated and applied",
+            )
+
+        coordinator = IntegrationCoordinator(
+            max_attempts=self.MAX_ATTEMPTS
+        )
+
+        integration_result = coordinator.run(
+            objective=self._redact_text(objective),
+            allowed_paths=allowed_tuple,
+            denied_paths=denied_tuple,
+            constraints={
+                "mission_name": mission_name,
+                "validation_required": validation_required,
+            },
+            validate_callback=coordinator_validate,
+            repair_callback=coordinator_repair,
+            source=mission_name,
+        )
+
+        result["status"] = integration_result.final_state
+        result["attempts"] = integration_result.attempts
+
+        if integration_result.final_state == "blocked":
+            reason = None
+
+            for failure in reversed(
+                integration_result.failure_history
+            ):
+                if (
+                    isinstance(failure.blocking_condition, str)
+                    and failure.blocking_condition
+                ):
+                    reason = failure.blocking_condition
+                    break
+
+                if failure.category in self._POLICY_BLOCKS:
+                    reason = failure.category
+                    break
+
+            if reason is not None:
+                result["blocked_reasons"] = [reason]
+            else:
+                result["blocked_reasons"] = list(blocked_reasons)
 
         return self._freeze_result(result)
 
