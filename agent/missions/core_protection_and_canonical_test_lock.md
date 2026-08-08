@@ -1,3 +1,5 @@
+CORE_MAINTENANCE_APPROVED
+
 Mission: Build Core Protection and Canonical Test Lock
 
 Goal
@@ -30,6 +32,8 @@ Deliverables
 - agent/policies/core_lock_manifest.json
 - agent/tests/test_core_protection.py
 - agent/ai/mission_runner.py
+
+# End Deliverables
 
 Protected Core Policy
 
