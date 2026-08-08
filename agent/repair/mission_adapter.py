@@ -1,368 +1,245 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
-import copy
-import re
+from types import MappingProxyType, SimpleNamespace
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
+
+# Do not modify the IntegrationCoordinator or its module.
+from agent.repair.integration import IntegrationCoordinator  # type: ignore
 
 
 @dataclass(frozen=True)
 class RepairRequest:
-    """
-    Immutable and safe request passed to the repair generation callback.
+  """Immutable repair request passed to the mission-level generation callback.
 
-    Notes
-    - allowed_paths and denied_paths are tuples to guarantee immutability.
-    - failure_summary and objective are redacted prior to construction to
-      avoid leaking raw unsanitized diagnostics.
-    """
-    mission_name: str
-    attempt_number: int
-    objective: str
-    failure_category: str
-    failure_summary: str
-    allowed_paths: Tuple[str, ...]
-    denied_paths: Tuple[str, ...]
-    validation_required: bool
+  This object is intentionally simple and immutable to prevent side-effects.
+  The adapter copies the RepairPlan.attempt_number exactly as provided by the
+  IntegrationCoordinator.
+  """
+
+  objective: Any
+  source: Optional[str]
+  constraints: Mapping[str, Any]
+  attempt_number: int
+  plan: Any
+
+
+@dataclass
+class MissionRepairResult:
+  """Mission-facing sanitized result translated from IntegrationResult.
+
+  This structure avoids leaking raw exception diagnostics through any of its
+  string-bearing fields and preserves a blocked_condition when applicable.
+  """
+
+  final_state: str
+  safe_summary: str
+  failure_history: List[Dict[str, Any]]
+  blocked_condition: Optional[str] = None
+  attempts: Optional[int] = None
+  raw: Optional[Any] = None  # Non-serialized reference to the original IntegrationResult for internal auditing only.
 
 
 class MissionRepairAdapter:
-    """
-    Orchestrates validation, repair generation, and repair application with
-    strict safety, determinism, and bounded attempts.
+  """Adapter bridging mission-facing callbacks to IntegrationCoordinator.
 
-    All side effects are injected via callbacks. This adapter does not perform
-    any process execution, network calls, Git operations, deployment, or file
-    system mutation.
-    """
+  Responsibilities:
+  - Preserve caller immutability for allowed/denied paths and constraints.
+  - Defensively snapshot constraints as a dict before passing to coordinator.
+  - Wrap mission validation into a zero-argument closure for coordinator.
+  - Implement repair callback that creates an immutable RepairRequest, invokes
+    mission generation and then apply callbacks, returning a minimal
+    success/failure object recognized by the coordinator loop.
+  - Sanitize translated IntegrationResult history so raw exception messages do
+    not leak through the mission-facing boundary.
+  - Do not perform independent retries; coordinator remains authoritative.
+  """
 
-    # Exactly three bounded attempts
-    MAX_ATTEMPTS: int = 3
+  def __init__(self, *, max_attempts: int = 3) -> None:
+    if max_attempts < 1:
+      raise ValueError("max_attempts must be >= 1")
+    self._max_attempts = int(max_attempts)
 
-    # Policy block reasons that prevent generation/apply
-    _POLICY_BLOCKS: Tuple[str, ...] = (
-        "protected-core-access",
-        "canonical-recovery-test-access",
-        "unavailable-core-protection",
-        "repository-safety-bypass",
-        "security-policy-bypass",
-        "provider-authentication-intervention",
+  def run(
+    self,
+    objective: Any,
+    *,
+    allowed_paths: Optional[Sequence[str]] = None,
+    denied_paths: Optional[Sequence[str]] = None,
+    constraints: Optional[Mapping[str, Any]] = None,
+    validate_callback: Callable[[], Any] | Callable[[Any], Any],
+    generation_callback: Callable[[RepairRequest], Any],
+    apply_callback: Callable[[Any], bool],
+    source: Optional[str] = None,
+    mission_context: Optional[Mapping[str, Any]] = None,
+  ) -> MissionRepairResult:
+    # Defensive snapshots; do not mutate caller inputs
+    safe_allowed_paths = tuple(allowed_paths or ())
+    safe_denied_paths = tuple(denied_paths or ())
+
+    # Coordinator requires Mapping supporting .items(); must not pass tuple/list
+    safe_constraints: Dict[str, Any] = dict(constraints or {})
+
+    # Zero-arg validation wrapper; capture only immutable/copied mission context
+    validate0 = self._wrap_zero_arg_validate(validate_callback, mission_context)
+
+    # Coordinator owns retries. Adapter repair-callback has no loop.
+    coordinator = IntegrationCoordinator(max_attempts=self._max_attempts)
+
+    def repair_callback(plan: Any) -> Any:
+      attempt_number = getattr(plan, "attempt_number", 0)
+      # Immutable request with constraints wrapped as read-only mapping
+      request = RepairRequest(
+        objective=objective,
+        source=source,
+        constraints=MappingProxyType(dict(safe_constraints)),
+        attempt_number=int(attempt_number),
+        plan=plan,
+      )
+
+      # 1. generation
+      try:
+        generated = generation_callback(request)
+      except Exception:
+        # Return a minimal result recognized by coordinator-style flow
+        # without leaking sensitive diagnostics.
+        return SimpleNamespace(success=False, category="generation-exception", summary="generation exception")
+
+      if not generated:
+        # Treat falsy generation as a failed generation without exceptions.
+        return SimpleNamespace(success=False, category="generation-failed", summary="generation failed")
+
+      # 2. apply
+      try:
+        applied = apply_callback(generated)
+      except Exception:
+        return SimpleNamespace(success=False, category="apply-exception", summary="apply exception")
+
+      if not applied:
+        return SimpleNamespace(success=False, category="apply-failed", summary="apply failed")
+
+      # Success path
+      return SimpleNamespace(success=True)
+
+    # Execute the coordinator with correct mapping-typed constraints
+    integration_result = coordinator.run(
+      objective,
+      allowed_paths=safe_allowed_paths,
+      denied_paths=safe_denied_paths,
+      constraints=dict(safe_constraints),  # ensure Mapping-compatible dict
+      validate_callback=validate0,
+      repair_callback=repair_callback,
+      source=source,
     )
 
-    def __init__(
-        self,
-        integration_coordinator: Optional[Any] = None,
-        validate_callback: Optional[Callable[[], Any]] = None,
-        generate_callback: Optional[Callable[[RepairRequest], Any]] = None,
-        apply_callback: Optional[Callable[[Any], Any]] = None,
-    ) -> None:
-        self._integration_coordinator = integration_coordinator
-        self._validate_callback = validate_callback
-        self._generate_callback = generate_callback
-        self._apply_callback = apply_callback
+    # Sanitize and translate to mission-facing result
+    mission_result = self._translate_and_sanitize_result(integration_result)
+    return mission_result
 
-    # --------------------------- Public API ---------------------------
+  @staticmethod
+  def _wrap_zero_arg_validate(
+    validate_callback: Callable[..., Any],
+    mission_context: Optional[Mapping[str, Any]],
+  ) -> Callable[[], Any]:
+    # The coordinator requires a zero-argument validation function.
+    # If the provided callback expects a context, this closure supplies it.
+    def _validate0() -> Any:
+      try:
+        # Preferred: context-aware signature
+        return validate_callback(mission_context)
+      except TypeError:
+        # Fallback: zero-arg callable
+        return validate_callback()
 
-    def run(
-        self,
-        *,
-        mission_name: str,
-        objective: str,
-        failure_category: str,
-        failure_summary: str,
-        allowed_paths: Sequence[str],
-        denied_paths: Sequence[str],
-        validation_required: bool = True,
-        policy_blocks: Optional[Iterable[str]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Execute validation and at most three bounded self-healing repair attempts.
+    return _validate0
 
-        Parameters are not mutated. Allowed/denied paths are preserved and not expanded.
-        Exceptions from callbacks are converted to safe failure events with redaction.
-        """
-        # Copy inputs to guarantee immutability of caller-provided objects
-        original_allowed = list(allowed_paths)
-        original_denied = list(denied_paths)
+  @staticmethod
+  def _sanitize_text(value: Any, *, default: str = "") -> str:
+    # Convert any value to a conservative single-line safe string.
+    if value is None:
+      return default
+    text = str(value)
+    # Replace control chars and collapse whitespace
+    text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    text = " ".join(text.split())
+    return text
 
-        # Prepare result container
-        result: Dict[str, Any] = {
-            "status": "",
-            "attempts": 0,
-            "initial_validation": {"success": None, "error": None},
-            "history": [],  # one entry per attempt
-            "failures": [],  # flattened failures across stages
-            "blocked_reasons": [],
-        }
+  @staticmethod
+  def _sanitize_failure_record(fr: Any) -> Dict[str, Any]:
+    # Extract with getattr to avoid coupling to a strict schema
+    category = getattr(fr, "category", None)
+    summary = getattr(fr, "summary", None)
+    diagnostic = getattr(fr, "diagnostic", None)
+    source = getattr(fr, "source", None)
+    blocking_condition = getattr(fr, "blocking_condition", None)
 
-        # Run initial validation (exception is a failure event; does not force final failure)
-        initial_success, initial_err = self._call_validation()
-        result["initial_validation"] = {
-            "success": initial_success,
-            "error": self._redact_text(initial_err) if initial_err else None,
-        }
-        if initial_err is not None:
-            result["failures"].append(
-                {
-                    "stage": "validation",
-                    "attempt": 0,
-                    "message": self._redact_text(initial_err),
-                }
-            )
+    cat_text = MissionRepairAdapter._sanitize_text(category, default="unknown")
 
-        # If already valid or validation not required, succeed early
-        if (initial_success is True) or (validation_required is False and initial_success is not False):
-            result["status"] = "succeeded"
-            result["attempts"] = 0
-            return self._freeze_result(result)
+    # Never leak raw exception text. Use bounded canonical phrases for known exception categories.
+    if cat_text == "validation-exception":
+      diag_text = "validation exception"
+    elif cat_text == "generation-exception":
+      diag_text = "generation exception"
+    elif cat_text == "apply-exception":
+      diag_text = "apply exception"
+    else:
+      diag_text = MissionRepairAdapter._sanitize_text(diagnostic, default="")
 
-        # Check safety policy blocks prior to generation/apply
-        blocks = set(str(b) for b in (policy_blocks or ()))
-        blocked_reasons = [b for b in self._POLICY_BLOCKS if b in blocks]
-        if blocked_reasons:
-            # Do not call generation/apply when blocked.
-            result["status"] = "blocked"
-            result["attempts"] = 0
-            result["blocked_reasons"] = blocked_reasons
-            return self._freeze_result(result)
+    # Summary and source are sanitized to single-line safe strings
+    sum_text = MissionRepairAdapter._sanitize_text(summary, default="")
+    src_text = MissionRepairAdapter._sanitize_text(source, default="")
 
-        # Prepare immutable redacted request base fields
-        redacted_objective = self._redact_text(objective)
-        redacted_summary = self._redact_text(failure_summary)
+    rec: Dict[str, Any] = {
+      "category": cat_text,
+      "summary": sum_text,
+      "diagnostic": diag_text,
+    }
+    if src_text:
+      rec["source"] = src_text
+    if blocking_condition is not None:
+      # If the coordinator provided a blocking condition, sanitize but preserve its content
+      rec["blocking_condition"] = MissionRepairAdapter._sanitize_text(blocking_condition, default="")
+    return rec
 
-        # Do not expand or mutate paths; store as tuples for immutability
-        allowed_tuple = tuple(original_allowed)
-        denied_tuple = tuple(original_denied)
+  @staticmethod
+  def _derive_blocked_condition(final_state: str, failure_history: List[Dict[str, Any]]) -> Optional[str]:
+    if final_state != "blocked" or not failure_history:
+      return None
 
-        # Attempt up to MAX_ATTEMPTS repairs
-        for attempt in range(1, self.MAX_ATTEMPTS + 1):
-            # Build request (immutable)
-            request = RepairRequest(
-                mission_name=mission_name,
-                attempt_number=attempt,
-                objective=redacted_objective,
-                failure_category=failure_category,
-                failure_summary=redacted_summary,
-                allowed_paths=allowed_tuple,
-                denied_paths=denied_tuple,
-                validation_required=validation_required,
-            )
+    # Attempt to derive the most relevant blocked condition from the latest failure record
+    last = failure_history[-1]
+    bc = last.get("blocking_condition")
+    if isinstance(bc, str) and bc:
+      return bc
 
-            # Generation step
-            gen_success, gen_payload, gen_err = self._call_generate(request)
-            attempt_rec: Dict[str, Any] = {
-                "attempt": attempt,
-                "generation": {
-                    "success": gen_success,
-                    "error": self._redact_text(gen_err) if gen_err else None,
-                },
-                "apply": None,
-                "validation": None,
-            }
-            if gen_err is not None:
-                result["failures"].append(
-                    {
-                        "stage": "generation",
-                        "attempt": attempt,
-                        "message": self._redact_text(gen_err),
-                    }
-                )
-            result["history"].append(attempt_rec)
+    # Fallback: preserve the exact category when it matches a blocked-like category
+    category = last.get("category")
+    if isinstance(category, str) and category:
+      return category
+    return None
 
-            if not gen_success:
-                # Proceed to next attempt
-                result["attempts"] = attempt
-                if attempt == self.MAX_ATTEMPTS:
-                    result["status"] = "exhausted"
-                continue
+  def _translate_and_sanitize_result(self, integration_result: Any) -> MissionRepairResult:
+    final_state = self._sanitize_text(getattr(integration_result, "final_state", None), default="unknown")
+    safe_summary = self._sanitize_text(getattr(integration_result, "safe_summary", None), default=final_state)
 
-            # Apply step
-            app_success, app_err = self._call_apply(gen_payload)
-            attempt_rec["apply"] = {
-                "success": app_success,
-                "error": self._redact_text(app_err) if app_err else None,
-            }
-            if app_err is not None:
-                result["failures"].append(
-                    {
-                        "stage": "apply",
-                        "attempt": attempt,
-                        "message": self._redact_text(app_err),
-                    }
-                )
-            result["attempts"] = attempt
+    # History may be a list of FailureRecord-like objects
+    raw_history: Iterable[Any] = getattr(integration_result, "failure_history", []) or []
+    sanitized_history: List[Dict[str, Any]] = [self._sanitize_failure_record(fr) for fr in raw_history]
 
-            if not app_success:
-                if attempt == self.MAX_ATTEMPTS:
-                    result["status"] = "exhausted"
-                continue
+    blocked_condition = self._derive_blocked_condition(final_state, sanitized_history)
 
-            # Post-apply validation
-            val_success, val_err = self._call_validation()
-            attempt_rec["validation"] = {
-                "success": val_success,
-                "error": self._redact_text(val_err) if val_err else None,
-            }
-            if val_err is not None:
-                result["failures"].append(
-                    {
-                        "stage": "validation",
-                        "attempt": attempt,
-                        "message": self._redact_text(val_err),
-                    }
-                )
+    attempts = getattr(integration_result, "attempts", None)
+    try:
+      attempts_int = int(attempts) if attempts is not None else None
+    except Exception:
+      attempts_int = None
 
-            if val_success:
-                result["status"] = "succeeded"
-                return self._freeze_result(result)
-
-            # Otherwise continue to next attempt
-            if attempt == self.MAX_ATTEMPTS:
-                result["status"] = "exhausted"
-
-        return self._freeze_result(result)
-
-    # --------------------------- Internal helpers ---------------------------
-
-    def _call_validation(self) -> Tuple[Optional[bool], Optional[str]]:
-        """
-        Safely invoke validation callback.
-        Returns (success, error_message). Exceptions are converted to failure events.
-        """
-        if self._validate_callback is None:
-            # If no validator provided, treat as unknown (not failure)
-            return None, None
-        try:
-            outcome = self._validate_callback()
-            success, _ = self._normalize_outcome(outcome)
-            return success, None
-        except Exception as exc:  # Do not catch BaseException
-            return False, f"Validation error: {self._stringify_exception(exc)}"
-
-    def _call_generate(self, request: RepairRequest) -> Tuple[bool, Any, Optional[str]]:
-        """
-        Safely invoke generation callback. Returns (success, payload, error_message).
-        """
-        if self._generate_callback is None:
-            return False, None, "Generation callback unavailable"
-        try:
-            outcome = self._generate_callback(request)
-            success, payload = self._normalize_outcome(outcome)
-            if success:
-                return True, payload, None
-            return False, None, "Repair generation failed"
-        except Exception as exc:  # Do not catch BaseException
-            return False, None, f"Generation exception: {self._stringify_exception(exc)}"
-
-    def _call_apply(self, payload: Any) -> Tuple[bool, Optional[str]]:
-        """
-        Safely invoke apply callback. Returns (success, error_message).
-        """
-        if self._apply_callback is None:
-            return False, "Apply callback unavailable"
-        try:
-            outcome = self._apply_callback(payload)
-            success, _ = self._normalize_outcome(outcome)
-            if success:
-                return True, None
-            return False, "Repair application failed"
-        except Exception as exc:  # Do not catch BaseException
-            return False, f"Apply exception: {self._stringify_exception(exc)}"
-
-    @staticmethod
-    def _normalize_outcome(outcome: Any) -> Tuple[bool, Any]:
-        """
-        Normalize callback outcomes into a (success, payload) tuple.
-        Rules:
-        - If dict with 'success' key: use its boolean value and return the dict as payload
-        - If strictly True/False: success is that value; payload is outcome
-        - If None or falsy (not False) like empty: treat as failure
-        - Otherwise: treat as success with payload=outcome
-        """
-        if isinstance(outcome, dict) and "success" in outcome:
-            return bool(outcome.get("success")), outcome
-        if isinstance(outcome, bool):
-            return outcome, outcome
-        if outcome is None:
-            return False, None
-        # Empty containers are treated as failure
-        if isinstance(outcome, (list, tuple, set, dict)) and not outcome:
-            return False, outcome
-        # Non-empty/non-None/non-bool truthy => success
-        return True, outcome
-
-    @staticmethod
-    def _stringify_exception(exc: Exception) -> str:
-        cls = type(exc).__name__
-        msg = str(exc)
-        return f"{cls}: {msg}" if msg else cls
-
-    @classmethod
-    def _redact_text(cls, text: Optional[str]) -> str:
-        """
-        Redact secrets from arbitrary text while preserving readable context.
-        - Generic credentials: replace value with [REDACTED]
-        - Authorization Bearer: canonicalize to 'Authorization: Bearer [REDACTED]'
-        """
-        if text is None:
-            return ""
-        s = str(text)
-
-        # Canonicalize Bearer tokens (case-insensitive)
-        # Replace the entire header with canonical capitalization
-        bearer_pattern = re.compile(r"(?i)authorization\s*:\s*bearer\s+([^\s]+)")
-        s = bearer_pattern.sub("Authorization: Bearer [REDACTED]", s)
-
-        # Generic key=value redaction
-        keys = [
-            "password",
-            "passwd",
-            "pwd",
-            "secret",
-            "api_key",
-            "api-key",
-            "token",
-            "access_token",
-            "access-token",
-            "refresh_token",
-            "refresh-token",
-            "private_key",
-            "private-key",
-        ]
-        # Build regex to match key[:=]value with optional quotes around value
-        key_alt = "|".join(re.escape(k) for k in keys)
-        # Example matches: password: value | password="value" | api_key=value
-        generic_re = re.compile(
-            rf"(?i)\b({key_alt})\b\s*[:=]\s*(\"|\'|)([^\"\'\s;,:]+)\2"
-        )
-        def _sub_cred(m: re.Match[str]) -> str:
-            # Preserve the key label, normalize separator to ':' for readability
-            key = m.group(1)
-            return f"{key}: [REDACTED]"
-        s = generic_re.sub(_sub_cred, s)
-
-        return s
-
-    @staticmethod
-    def _freeze_result(result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Return a deterministic deep-copied result limited to JSON-safe primitives.
-        """
-        # Convert any None placeholders for stages to consistent dicts
-        frozen = copy.deepcopy(result)
-        for rec in frozen.get("history", []):
-            if rec.get("apply") is None:
-                rec["apply"] = {"success": None, "error": None}
-            if rec.get("validation") is None:
-                rec["validation"] = {"success": None, "error": None}
-        # Ensure blocked_reasons ordering is deterministic as defined in policy list
-        if "blocked_reasons" in frozen and isinstance(frozen["blocked_reasons"], list):
-            order = {name: idx for idx, name in enumerate(MissionRepairAdapter._POLICY_BLOCKS)}
-            frozen["blocked_reasons"].sort(key=lambda n: order.get(n, len(order)))
-        return frozen
-
-
-__all__ = [
-    "MissionRepairAdapter",
-    "RepairRequest",
-]
+    # Return mission-facing sanitized snapshot; retain a non-serialized raw reference for internal audit if needed
+    return MissionRepairResult(
+      final_state=final_state,
+      safe_summary=safe_summary,
+      failure_history=sanitized_history,
+      blocked_condition=blocked_condition,
+      attempts=attempts_int,
+      raw=integration_result,
+    )
