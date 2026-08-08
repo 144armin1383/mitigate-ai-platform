@@ -492,11 +492,11 @@ def validate_with_self_healing(
 
     def generation_callback(request: Any) -> dict[str, Any]:
         repair_description = (
-            f"Repair generated output for mission {mission_path.stem}.\\n"
-            f"Repair attempt: {request.attempt_number}.\\n"
-            f"Failure category: {request.failure_category}.\\n"
-            f"Safe failure summary: {request.failure_summary}.\\n"
-            f"Allowed deliverables: {', '.join(request.allowed_paths)}.\\n"
+            f"Repair generated output for mission {mission_path.stem}.\n"
+            f"Repair attempt: {request.attempt_number}.\n"
+            f"Failure category: {request.failure_category}.\n"
+            f"Safe failure summary: {request.failure_summary}.\n"
+            f"Allowed deliverables: {', '.join(request.allowed_paths)}.\n"
             "Modify only the allowed deliverables. "
             "Do not add files. Do not modify protected Core paths unless they "
             "are already explicitly present in the original mission deliverables. "
