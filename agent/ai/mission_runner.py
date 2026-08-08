@@ -13,6 +13,10 @@ from core.logger import build_logger
 from providers.openai.provider import openai_provider
 from services.planner import Planner
 from services.repository_scanner import RepositoryScanner
+from policies.core_protection import (
+    load_core_lock_manifest,
+    validate_mission_write,
+)
 
 
 log = build_logger()
@@ -270,6 +274,7 @@ def validate_generated_file(
 def write_generated_files(
     data: dict[str, Any],
     deliverables: set[str],
+    mission_text: str,
 ) -> list[Path]:
     """Write generated files atomically."""
 
@@ -289,6 +294,23 @@ def write_generated_files(
         )
 
         relative = str(destination.relative_to(REPOSITORY_ROOT))
+
+        try:
+            protection_config = load_core_lock_manifest(
+                REPOSITORY_ROOT / "agent/policies/core_lock_manifest.json"
+            )
+            protection_decision = validate_mission_write(
+                relative,
+                mission_text,
+                protection_config,
+            )
+        except Exception:
+            raise MissionError("CORE_PROTECTION_UNAVAILABLE")
+
+        if not protection_decision.allowed:
+            raise MissionError(
+                protection_decision.code or "CORE_PATH_LOCKED"
+            )
 
         if relative in generated_paths:
             raise MissionError(
@@ -449,6 +471,7 @@ def run_mission(mission_name: str) -> int:
         written = write_generated_files(
             data,
             deliverables,
+            mission,
         )
 
         validate_generated_files(written)
