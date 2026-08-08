@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 import copy
 import re
 
-from agent.repair.integration import (
+from .integration import (
     IntegrationCoordinator,
     RepairExecutionResult,
     ValidationResult,
