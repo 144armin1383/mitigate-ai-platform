@@ -20,10 +20,12 @@ from policies.core_protection import (
 
 try:
     from repair.mission_adapter import MissionRepairAdapter
+    from repair.runtime_audit import capture_self_healing_audit
 except ModuleNotFoundError as exc:
     if exc.name != "repair":
         raise
     from agent.repair.mission_adapter import MissionRepairAdapter
+    from agent.repair.runtime_audit import capture_self_healing_audit
 
 
 log = build_logger()
@@ -31,6 +33,8 @@ log = build_logger()
 AGENT_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = AGENT_ROOT.parent
 MISSIONS_ROOT = AGENT_ROOT / "missions"
+
+LAST_SELF_HEALING_AUDIT = None
 
 
 class MissionError(RuntimeError):
@@ -593,6 +597,10 @@ def validate_with_self_healing(
         apply_callback=apply_callback,
     )
 
+    from datetime import datetime, timezone
+
+    audit_started_at = datetime.now(timezone.utc)
+
     repair_result = adapter.run(
         mission_name=mission_path.stem,
         objective=(
@@ -604,6 +612,22 @@ def validate_with_self_healing(
         allowed_paths=sorted(deliverables),
         denied_paths=(),
         validation_required=True,
+    )
+
+    audit_completed_at = datetime.now(timezone.utc)
+
+    global LAST_SELF_HEALING_AUDIT
+
+    LAST_SELF_HEALING_AUDIT = capture_self_healing_audit(
+        mission_name=mission_path.stem,
+        repair_id=f"{mission_path.stem}:{failure_category}",
+        mission_result=repair_result,
+        failure_category=failure_category,
+        safe_failure_summary=safe_summary,
+        allowed_paths=sorted(deliverables),
+        denied_paths=(),
+        started_at=audit_started_at,
+        completed_at=audit_completed_at,
     )
 
     status = str(repair_result.get("status", ""))
@@ -619,6 +643,9 @@ def validate_with_self_healing(
 
 def run_mission(mission_name: str) -> int:
     """Execute one autonomous development mission."""
+
+    global LAST_SELF_HEALING_AUDIT
+    LAST_SELF_HEALING_AUDIT = None
 
     require_clean_repository()
     require_main_branch()
