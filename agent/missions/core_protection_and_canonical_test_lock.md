@@ -31,7 +31,6 @@ Deliverables
 - agent/policies/core_protection.py
 - agent/policies/core_lock_manifest.json
 - agent/tests/test_core_protection.py
-- agent/ai/mission_runner.py
 
 # End Deliverables
 
@@ -299,4 +298,16 @@ After this feature is installed, future normal missions must be subject to the l
 Generated implementation must not merge itself into main.
 
 All existing unittest tests must pass.
+
+
+
+# Phase 1 Installation Boundary
+
+This mission is Phase 1 only.
+
+Do NOT modify agent/ai/mission_runner.py in this phase.
+
+Create and validate the protection policy, manifest, and policy tests only.
+
+The protection layer will be integrated into Mission Runner in a separate explicitly approved core-maintenance mission after this phase passes all tests.
 
