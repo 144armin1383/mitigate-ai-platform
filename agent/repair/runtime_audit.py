@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence, Any
+from typing import Any, Optional, Sequence
 
-from .audit_integration import build_audit_from_mission_result
+from .audit_integration import (
+    build_audit_from_mission_result,
+)
+from .audit_store import SelfHealingAuditStore
 from .observability import SelfHealingAuditRecord
+
+
+AUDIT_CAPTURE_FAILED = "AUDIT_CAPTURE_FAILED"
+AUDIT_PERSISTENCE_FAILED = "AUDIT_PERSISTENCE_FAILED"
 
 
 @dataclass(frozen=True)
@@ -25,14 +32,16 @@ def capture_self_healing_audit(
     denied_paths: Sequence[str],
     started_at: Any,
     completed_at: Any,
+    store: Optional[SelfHealingAuditStore] = None,
 ) -> RuntimeAuditCaptureResult:
+
     try:
         record = build_audit_from_mission_result(
             mission_name=mission_name,
             repair_id=repair_id,
             mission_result=mission_result,
-            failure_category=failure_category,
-            safe_failure_summary=safe_failure_summary,
+            initial_failure_category=failure_category,
+            initial_safe_summary=safe_failure_summary,
             allowed_paths=tuple(allowed_paths),
             denied_paths=tuple(denied_paths),
             started_at=started_at,
@@ -42,7 +51,26 @@ def capture_self_healing_audit(
         return RuntimeAuditCaptureResult(
             captured=False,
             record=None,
-            safe_error_code="AUDIT_CAPTURE_FAILED",
+            safe_error_code=AUDIT_CAPTURE_FAILED,
+        )
+
+    try:
+        audit_store = (
+            store
+            if store is not None
+            else SelfHealingAuditStore()
+        )
+
+        persisted = audit_store.append(record)
+
+    except Exception:
+        persisted = False
+
+    if not persisted:
+        return RuntimeAuditCaptureResult(
+            captured=True,
+            record=record,
+            safe_error_code=AUDIT_PERSISTENCE_FAILED,
         )
 
     return RuntimeAuditCaptureResult(

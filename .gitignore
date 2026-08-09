@@ -51,3 +51,5 @@ agent/tasks/queue.json
 agent/runtime/runtime.json
 agent/memory/memory.json
 agent/updates/update.json
+
+/tmp_self_healing_audit/
