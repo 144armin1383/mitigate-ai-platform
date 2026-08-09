@@ -15,8 +15,15 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Deque, Dict, Iterable, List, Mapping, MutableMapping, Optional, Protocol, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from collections import deque
+
+try:
+    from repair.audit_store import SelfHealingAuditStore
+except ModuleNotFoundError as exc:
+    if exc.name != "repair":
+        raise
+    from agent.repair.audit_store import SelfHealingAuditStore
 
 # =============================
 # Exceptions and Interfaces
@@ -87,6 +94,7 @@ class ServerConfig:
     rate_limit_per_minute: int = 60
     worker_heartbeat_ttl_secs: int = 120
     api_events_path: Optional[str] = None  # Optional path to append structured API events (jsonl)
+    audit_path: Optional[str] = None  # Optional Self-Healing audit JSONL path
 
 
 class AdminAuth:
@@ -213,6 +221,7 @@ class PrivateAdminAPIHandler(BaseHTTPRequestHandler):
     events_path: Optional[str]
     reports_path: Optional[str]
     heartbeat_path: Optional[str]
+    audit_path: Optional[str]
 
     # Disable default logging to stderr
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003 (shadowing built-in)
@@ -315,6 +324,24 @@ class PrivateAdminAPIHandler(BaseHTTPRequestHandler):
                     mission_id = parts[3]
                     self._handle_get_mission(request_id, mission_id)
                     return
+            if route == "/v1/self-healing/status":
+                self._handle_self_healing_status(request_id)
+                return
+            if route == "/v1/self-healing/audits":
+                self._handle_self_healing_audits(
+                    request_id,
+                    parsed.query,
+                )
+                return
+            if route.startswith("/v1/self-healing/audits/"):
+                repair_id = route[
+                    len("/v1/self-healing/audits/"):
+                ]
+                self._handle_self_healing_audit_detail(
+                    request_id,
+                    repair_id,
+                )
+                return
             if route == "/v1/events":
                 self._handle_events(request_id, parsed.query)
                 return
@@ -477,6 +504,219 @@ class PrivateAdminAPIHandler(BaseHTTPRequestHandler):
             return
         self._write_json(HTTPStatus.OK, {"request_id": request_id, "report": content})
 
+    def _self_healing_audit_store(self) -> SelfHealingAuditStore:
+        if self.audit_path:
+            return SelfHealingAuditStore(self.audit_path)
+        return SelfHealingAuditStore()
+
+    def _handle_self_healing_audits(
+        self,
+        request_id: str,
+        query: str,
+    ) -> None:
+        params = parse_qs(
+            query or "",
+            keep_blank_values=True,
+        )
+
+        allowed = {
+            "mission_name",
+            "repair_id",
+            "final_state",
+            "started_at_from",
+            "started_at_to",
+            "min_attempts",
+            "max_attempts",
+            "limit",
+            "order",
+        }
+
+        unknown = sorted(
+            key for key in params
+            if key not in allowed
+        )
+
+        if unknown:
+            self._write_error(
+                HTTPStatus.BAD_REQUEST,
+                request_id,
+                "invalid_query",
+                "Unknown query parameter",
+                {"fields": unknown},
+            )
+            return
+
+        def one(name: str) -> Optional[str]:
+            values = params.get(name)
+            if not values:
+                return None
+            return values[0]
+
+        try:
+            limit_raw = one("limit")
+            limit = (
+                100
+                if limit_raw is None
+                else int(limit_raw)
+            )
+
+            if limit <= 0 or limit > 1000:
+                raise ValueError
+
+            min_raw = one("min_attempts")
+            max_raw = one("max_attempts")
+
+            min_attempts = (
+                None
+                if min_raw is None
+                else int(min_raw)
+            )
+            max_attempts = (
+                None
+                if max_raw is None
+                else int(max_raw)
+            )
+
+            if (
+                min_attempts is not None
+                and min_attempts < 0
+            ):
+                raise ValueError
+
+            if (
+                max_attempts is not None
+                and max_attempts < 0
+            ):
+                raise ValueError
+
+            if (
+                min_attempts is not None
+                and max_attempts is not None
+                and min_attempts > max_attempts
+            ):
+                raise ValueError
+
+            order = one("order") or "newest"
+
+            if order not in {"newest", "oldest"}:
+                raise ValueError
+
+            records = self._self_healing_audit_store().query(
+                mission_name=one("mission_name"),
+                repair_id=one("repair_id"),
+                final_state=one("final_state"),
+                started_at_from=one("started_at_from"),
+                started_at_to=one("started_at_to"),
+                min_attempts=min_attempts,
+                max_attempts=max_attempts,
+                limit=limit,
+                newest_first=(order == "newest"),
+            )
+
+        except (TypeError, ValueError):
+            self._write_error(
+                HTTPStatus.BAD_REQUEST,
+                request_id,
+                "invalid_query",
+                "Invalid audit query",
+            )
+            return
+
+        audits = [
+            safe_json(record.to_dict())
+            for record in records
+        ]
+
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "request_id": request_id,
+                "count": len(audits),
+                "audits": audits,
+            },
+        )
+
+    def _handle_self_healing_audit_detail(
+        self,
+        request_id: str,
+        raw_repair_id: str,
+    ) -> None:
+        repair_id = unquote(raw_repair_id).strip()
+
+        if (
+            not repair_id
+            or len(repair_id) > 256
+            or "/" in repair_id
+            or any(ord(ch) < 32 for ch in repair_id)
+        ):
+            self._write_error(
+                HTTPStatus.BAD_REQUEST,
+                request_id,
+                "invalid_repair_id",
+                "Invalid repair identifier",
+            )
+            return
+
+        records = self._self_healing_audit_store().query(
+            repair_id=repair_id,
+            limit=1,
+            newest_first=True,
+        )
+
+        if not records:
+            self._write_error(
+                HTTPStatus.NOT_FOUND,
+                request_id,
+                "not_found",
+                "Self-Healing audit not found",
+            )
+            return
+
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "request_id": request_id,
+                "audit": safe_json(
+                    records[0].to_dict()
+                ),
+            },
+        )
+
+    def _handle_self_healing_status(
+        self,
+        request_id: str,
+    ) -> None:
+        records = self._self_healing_audit_store().query(
+            newest_first=True,
+        )
+
+        counts: Dict[str, int] = {}
+
+        for record in records:
+            state = str(record.final_state)
+            counts[state] = counts.get(state, 0) + 1
+
+        latest = (
+            safe_json(records[0].to_dict())
+            if records
+            else None
+        )
+
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "request_id": request_id,
+                "self_healing": {
+                    "total_audits": len(records),
+                    "by_final_state": {
+                        key: counts[key]
+                        for key in sorted(counts)
+                    },
+                    "latest_audit": latest,
+                },
+            },
+        )
+
     def _handle_post_request(self, request_id: str) -> None:
         body, err = self._parse_json(max_bytes=self.config.max_request_bytes, require_content_type=True)
         if err is not None:
@@ -567,6 +807,7 @@ def build_handler(config: ServerConfig, auth: AdminAuth, planner: PlannerInterfa
     _H.events_path = config.events_path
     _H.reports_path = config.reports_path
     _H.heartbeat_path = config.heartbeat_path
+    _H.audit_path = config.audit_path
     return _H
 
 
@@ -644,6 +885,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--events-path", default=None, help="Path to worker events file (jsonl)")
     p.add_argument("--reports-path", default=None, help="Path to reports directory")
     p.add_argument("--heartbeat-path", default=None, help="Path to worker heartbeat file")
+    p.add_argument("--audit-path", default=None, help="Path to Self-Healing audit JSONL file")
     p.add_argument("--request-size", type=int, default=1024 * 1024, help="Maximum request body size in bytes (default 1048576)")
     p.add_argument("--rate-limit", type=int, default=60, help="Requests per minute per client (default 60)")
     return p
@@ -659,6 +901,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         events_path=args.events_path,
         reports_path=args.reports_path,
         heartbeat_path=args.heartbeat_path,
+        audit_path=args.audit_path,
         max_request_bytes=int(args.request_size),
         rate_limit_per_minute=int(args.rate_limit),
     )

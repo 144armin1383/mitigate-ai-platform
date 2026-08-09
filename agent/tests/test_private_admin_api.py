@@ -12,6 +12,12 @@ import types
 import unittest
 from typing import Any, Dict, List, Mapping, Optional
 
+from agent.repair.audit_store import SelfHealingAuditStore
+from agent.repair.observability import (
+    SelfHealingAuditRecord,
+    get_schema_version,
+)
+
 from agent.api.private_admin_api import (
     AdminAuth,
     DuplicateRequestError,
@@ -171,6 +177,10 @@ class TestPrivateAdminAPI(unittest.TestCase):
         self.reports_dir = os.path.join(self.tmpdir.name, "reports")
         os.makedirs(self.reports_dir, exist_ok=True)
         self.heartbeat_path = os.path.join(self.tmpdir.name, "worker.heartbeat")
+        self.audit_path = os.path.join(
+            self.tmpdir.name,
+            "self_healing_audit.jsonl",
+        )
         # Create event file with secrets to test redaction
         with open(self.events_path, "w", encoding="utf-8") as f:
             for i in range(5):
@@ -186,6 +196,7 @@ class TestPrivateAdminAPI(unittest.TestCase):
             events_path=self.events_path,
             reports_path=self.reports_dir,
             heartbeat_path=self.heartbeat_path,
+            audit_path=self.audit_path,
             rate_limit_per_minute=100,
         )
         self.thread, self.port, self.httpd = start_server(self.config, self.planner, self.queue, self.token)
@@ -195,6 +206,39 @@ class TestPrivateAdminAPI(unittest.TestCase):
         self.tmpdir.cleanup()
         if "MITIGATE_AI_ADMIN_TOKEN" in os.environ:
             del os.environ["MITIGATE_AI_ADMIN_TOKEN"]
+
+    def _append_self_healing_audit(
+        self,
+        *,
+        mission_name: str,
+        repair_id: str,
+        final_state: str,
+        attempts: int,
+        started_at: str,
+    ) -> None:
+        record = SelfHealingAuditRecord(
+            schema_version=get_schema_version(),
+            mission_name=mission_name,
+            repair_id=repair_id,
+            initial_failure_category="unittest-failure",
+            initial_safe_summary="safe summary",
+            final_state=final_state,
+            total_attempts=attempts,
+            blocked_condition=(
+                "policy-block"
+                if final_state == "blocked"
+                else None
+            ),
+            attempts=(),
+            started_at=started_at,
+            completed_at=started_at,
+        )
+
+        ok = SelfHealingAuditStore(
+            self.audit_path
+        ).append(record)
+
+        self.assertTrue(ok)
 
     # Health endpoint (no auth)
     def test_health_endpoint(self) -> None:
@@ -357,6 +401,187 @@ class TestPrivateAdminAPI(unittest.TestCase):
         rep = payload.get("report", {})
         self.assertEqual(2, rep.get("b"))
         self.assertEqual("[REDACTED]", rep.get("password"))
+
+    def test_self_healing_audits_require_auth(self) -> None:
+        status, _ = api_request(
+            self.port,
+            "GET",
+            "/v1/self-healing/audits",
+        )
+        self.assertEqual(401, status)
+
+    def test_self_healing_empty_audit_list(self) -> None:
+        status, payload = api_request(
+            self.port,
+            "GET",
+            "/v1/self-healing/audits",
+            token=self.token,
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual(0, payload.get("count"))
+        self.assertEqual([], payload.get("audits"))
+
+    def test_self_healing_audit_list_and_filters(self) -> None:
+        self._append_self_healing_audit(
+            mission_name="mission-a",
+            repair_id="repair-1",
+            final_state="succeeded",
+            attempts=1,
+            started_at="2026-01-01T00:00:00Z",
+        )
+        self._append_self_healing_audit(
+            mission_name="mission-b",
+            repair_id="repair-2",
+            final_state="blocked",
+            attempts=2,
+            started_at="2026-01-02T00:00:00Z",
+        )
+        self._append_self_healing_audit(
+            mission_name="mission-a",
+            repair_id="repair-3",
+            final_state="exhausted",
+            attempts=3,
+            started_at="2026-01-03T00:00:00Z",
+        )
+
+        status, payload = api_request(
+            self.port,
+            "GET",
+            (
+                "/v1/self-healing/audits"
+                "?mission_name=mission-a"
+                "&order=newest"
+            ),
+            token=self.token,
+        )
+
+        self.assertEqual(200, status)
+
+        audits = payload.get("audits", [])
+
+        self.assertEqual(2, len(audits))
+        self.assertEqual(
+            "repair-3",
+            audits[0].get("repair_id"),
+        )
+        self.assertEqual(
+            "repair-1",
+            audits[1].get("repair_id"),
+        )
+
+        status2, payload2 = api_request(
+            self.port,
+            "GET",
+            (
+                "/v1/self-healing/audits"
+                "?final_state=blocked"
+                "&min_attempts=2"
+                "&max_attempts=2"
+            ),
+            token=self.token,
+        )
+
+        self.assertEqual(200, status2)
+        self.assertEqual(1, payload2.get("count"))
+
+    def test_self_healing_audit_detail(self) -> None:
+        self._append_self_healing_audit(
+            mission_name="mission-a",
+            repair_id="repair-detail",
+            final_state="succeeded",
+            attempts=1,
+            started_at="2026-01-01T00:00:00Z",
+        )
+
+        status, payload = api_request(
+            self.port,
+            "GET",
+            "/v1/self-healing/audits/repair-detail",
+            token=self.token,
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual(
+            "repair-detail",
+            payload.get("audit", {}).get("repair_id"),
+        )
+
+    def test_self_healing_unknown_audit(self) -> None:
+        status, payload = api_request(
+            self.port,
+            "GET",
+            "/v1/self-healing/audits/not-present",
+            token=self.token,
+        )
+
+        self.assertEqual(404, status)
+        self.assertEqual(
+            "not_found",
+            payload.get("error", {}).get("code"),
+        )
+
+    def test_self_healing_status_summary(self) -> None:
+        self._append_self_healing_audit(
+            mission_name="mission-a",
+            repair_id="repair-1",
+            final_state="succeeded",
+            attempts=1,
+            started_at="2026-01-01T00:00:00Z",
+        )
+        self._append_self_healing_audit(
+            mission_name="mission-b",
+            repair_id="repair-2",
+            final_state="blocked",
+            attempts=2,
+            started_at="2026-01-02T00:00:00Z",
+        )
+
+        status, payload = api_request(
+            self.port,
+            "GET",
+            "/v1/self-healing/status",
+            token=self.token,
+        )
+
+        self.assertEqual(200, status)
+
+        sh = payload.get("self_healing", {})
+
+        self.assertEqual(2, sh.get("total_audits"))
+        self.assertEqual(
+            1,
+            sh.get("by_final_state", {}).get("succeeded"),
+        )
+        self.assertEqual(
+            1,
+            sh.get("by_final_state", {}).get("blocked"),
+        )
+        self.assertEqual(
+            "repair-2",
+            sh.get("latest_audit", {}).get("repair_id"),
+        )
+
+    def test_self_healing_invalid_query(self) -> None:
+        for path in (
+            "/v1/self-healing/audits?limit=0",
+            "/v1/self-healing/audits?limit=1001",
+            "/v1/self-healing/audits?order=random",
+            "/v1/self-healing/audits?min_attempts=-1",
+            "/v1/self-healing/audits?unknown=value",
+        ):
+            status, payload = api_request(
+                self.port,
+                "GET",
+                path,
+                token=self.token,
+            )
+
+            self.assertEqual(400, status)
+            self.assertEqual(
+                "invalid_query",
+                payload.get("error", {}).get("code"),
+            )
 
     def test_rate_limiting(self) -> None:
         # New server with harsh limit
