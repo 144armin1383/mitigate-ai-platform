@@ -85,6 +85,43 @@ class ProductionPlannerContractAdapter:
         return task_type
 
     @staticmethod
+    def _extract_deliverables(
+        user_message: str,
+    ) -> list[str]:
+        """Extract explicit safe repository-relative file paths."""
+
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_.\\/-])"
+            r"([A-Za-z0-9_.-]+"
+            r"(?:/[A-Za-z0-9_.-]+)+)"
+        )
+
+        deliverables: list[str] = []
+
+        for match in pattern.finditer(user_message):
+            candidate = (
+                match.group(1)
+                .strip()
+                .rstrip(".,;:!?")
+            )
+            parts = candidate.split("/")
+
+            if (
+                candidate.startswith("/")
+                or any(
+                    part in {"", ".", ".."}
+                    for part in parts
+                )
+                or parts[0] == ".git"
+            ):
+                continue
+
+            if candidate not in deliverables:
+                deliverables.append(candidate)
+
+        return deliverables
+
+    @staticmethod
     def _priority_for(task_type: str) -> int:
         priorities = {
             "security": 0,
@@ -238,6 +275,9 @@ class ProductionPlannerContractAdapter:
             "policy_profile": policy_profile,
             "user_request": user_message,
             "upload_ids": list(upload_ids),
+            "deliverables": self._extract_deliverables(
+                user_message
+            ),
         }
 
         return {

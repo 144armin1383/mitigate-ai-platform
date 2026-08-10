@@ -108,7 +108,49 @@ class ProductionRequestQueueAdapter:
         description = str(mission.get("description") or "").strip()
         task_type = str(mission.get("task_type") or "general").strip()
 
-        payload = self._validate_payload(mission.get("payload", {}))
+        payload = self._validate_payload(
+            mission.get("payload", {})
+        )
+
+        deliverables_raw = payload.get(
+            "deliverables",
+            [],
+        )
+
+        if not isinstance(deliverables_raw, list):
+            raise ValueError("invalid_deliverables")
+
+        deliverables: list[str] = []
+
+        for item in deliverables_raw:
+            if not isinstance(item, str):
+                raise ValueError("invalid_deliverable")
+
+            candidate = item.strip()
+
+            if not candidate:
+                raise ValueError("invalid_deliverable")
+
+            parts = candidate.split("/")
+
+            if (
+                candidate.startswith("/")
+                or chr(92) in candidate
+                or any(
+                    part in {"", ".", ".."}
+                    for part in parts
+                )
+                or parts[0] == ".git"
+            ):
+                raise ValueError("unsafe_deliverable")
+
+            if candidate not in deliverables:
+                deliverables.append(candidate)
+
+        deliverables_block = "".join(
+            f"- {item}\\n"
+            for item in deliverables
+        )
 
         return (
             f"# {title}\n\n"
@@ -116,6 +158,8 @@ class ProductionRequestQueueAdapter:
             f"Task Type: {task_type}\n\n"
             "## Objective\n\n"
             f"{description}\n\n"
+            "## Deliverables\n\n"
+            f"{deliverables_block}\n"
             "## Context\n\n"
             f"```json\n"
             f"{json.dumps(payload, sort_keys=True, indent=2)}\n"

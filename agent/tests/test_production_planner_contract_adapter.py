@@ -155,3 +155,46 @@ class ProductionPlannerContractAdapterTests(
 
 if __name__ == "__main__":
     unittest.main()
+
+class ProductionPlannerDeliverablesContractTests(unittest.TestCase):
+    def test_extracts_explicit_repository_file(self) -> None:
+        message = (
+            "Create a small documentation file at "
+            "docs/runtime/FIRST_PRODUCTION_E2E.md and validate it."
+        )
+
+        self.assertEqual(
+            ProductionPlannerContractAdapter._extract_deliverables(
+                message
+            ),
+            [
+                "docs/runtime/FIRST_PRODUCTION_E2E.md",
+            ],
+        )
+
+    def test_deduplicates_explicit_repository_file(self) -> None:
+        message = (
+            "Create docs/runtime/FIRST_PRODUCTION_E2E.md and then "
+            "validate docs/runtime/FIRST_PRODUCTION_E2E.md."
+        )
+
+        self.assertEqual(
+            ProductionPlannerContractAdapter._extract_deliverables(
+                message
+            ),
+            [
+                "docs/runtime/FIRST_PRODUCTION_E2E.md",
+            ],
+        )
+
+    def test_ignores_absolute_path(self) -> None:
+        message = (
+            "Inspect /srv/mitigate/private.txt before continuing."
+        )
+
+        self.assertEqual(
+            ProductionPlannerContractAdapter._extract_deliverables(
+                message
+            ),
+            [],
+        )

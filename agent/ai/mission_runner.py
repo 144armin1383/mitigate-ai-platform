@@ -170,24 +170,43 @@ def extract_deliverables(mission: str) -> set[str]:
         if line.startswith("#"):
             break
 
-        candidate = line.lstrip("-*0123456789. ").strip()
+        candidate = line
+
+        if candidate.startswith(("-", "*")):
+            candidate = candidate[1:].strip()
+        else:
+            number, separator, remainder = candidate.partition(". ")
+
+            if (
+                separator
+                and number.isdigit()
+            ):
+                candidate = remainder.strip()
 
         if not candidate:
             continue
 
-        if not candidate.startswith("agent/"):
-            continue
+        candidate_path = Path(candidate)
 
-        if candidate.startswith("/") or ".." in Path(candidate).parts:
+        if (
+            candidate_path.is_absolute()
+            or chr(92) in candidate
+            or ".." in candidate_path.parts
+            or not candidate_path.parts
+            or candidate_path.parts[0] == ".git"
+        ):
             raise MissionError(
                 f"Unsafe deliverable path: {candidate}"
             )
 
-        deliverables.add(candidate)
+        deliverables.add(
+            candidate_path.as_posix()
+        )
 
     if not deliverables:
         raise MissionError(
-            "No valid agent/ deliverables were found in the mission."
+            "No valid repository-relative deliverables "
+            "were found in the mission."
         )
 
     return deliverables
