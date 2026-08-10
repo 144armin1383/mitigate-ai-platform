@@ -226,9 +226,14 @@ class BackgroundWorker:
                 self._queue.complete(mission_id)
                 self._emit("completed", mission_id=mission_id)
             elif status == "retry":
-                self._queue.retry(mission_id)
+                # MissionQueue.fail() is the single retry-budget authority:
+                # it atomically moves running -> retrying while budget remains,
+                # otherwise running -> failed.
+                self._queue.fail(mission_id)
                 self._emit("retrying", mission_id=mission_id)
             elif status == "exhausted":
+                # Controller-level retries are exhausted. Queue transition still
+                # goes through fail() so attempt accounting remains centralized.
                 self._queue.fail(mission_id)
                 self._emit("failed", mission_id=mission_id)
             elif status == "blocked":
@@ -237,9 +242,14 @@ class BackgroundWorker:
                 # Use failed event with reason to adhere to the logging contract while signaling blockage
                 self._emit("failed", mission_id=mission_id, reason="blocked")
             else:
-                # Unknown status: treat as retryable to avoid data loss; schedule retry deterministically
-                self._queue.retry(mission_id)
-                self._emit("retrying", mission_id=mission_id, reason="unknown_status")
+                # Unknown controller output fails closed. Do not create an
+                # implicit retry path outside the established retry authority.
+                self._queue.block(mission_id)
+                self._emit(
+                    "failed",
+                    mission_id=mission_id,
+                    reason="unknown_status",
+                )
 
             # In once mode, exit after processing a single claimed mission
             if self.once:

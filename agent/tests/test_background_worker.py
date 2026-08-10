@@ -73,7 +73,11 @@ class FakeMissionQueue:
         with self._lock:
             rec = self._missions[mission_id]
             assert rec["state"] == "running"
-            rec["state"] = "failed"
+            rec["attempts"] += 1
+            if rec["attempts"] <= rec["max_retries"]:
+                rec["state"] = "pending"
+            else:
+                rec["state"] = "failed"
             rec["owner"] = None
 
     def block(self, mission_id: str) -> None:
@@ -121,22 +125,30 @@ class FakeController:
 
     def __init__(self, queue: FakeMissionQueue) -> None:
         self._queue = queue
+        self._attempts: Dict[str, int] = {}
 
     def execute(self, mission: Dict[str, Any]) -> str:
         mid = str(mission["id"])
         outcome = self._queue.get_outcome(mid)
+
         if outcome == "success":
             return "success"
+
         if outcome == "blocked":
             return "blocked"
+
         if outcome == "exhausted":
             return "exhausted"
+
         if outcome == "retryable":
-            attempt = self._queue.increment_attempt(mid)
+            attempt = self._attempts.get(mid, 0) + 1
+            self._attempts[mid] = attempt
+
             if attempt <= self._queue.get_max_retries(mid):
                 return "retry"
+
             return "exhausted"
-        # Unknown -> treat as retry
+
         return "retry"
 
 

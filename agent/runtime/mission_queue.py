@@ -216,8 +216,12 @@ class MissionQueue:
             self._validate_no_cycles()  # graph changed (node removed), keep invariant
             self._save()
 
-    def claim(self) -> Optional[Dict[str, Any]]:
+    def claim(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Atomically select the next runnable mission and mark it running.
+
+        ``worker_id`` is accepted for BackgroundWorker protocol compatibility.
+        Mission ownership is enforced by the existing atomic file-lock claim
+        boundary; worker identity is intentionally not persisted here.
         Returns the mission dict or None if none are claimable.
         Only pending or retrying missions with all dependencies completed are eligible.
         Deterministic ordering by priority (descending), created_seq (ascending), id (ascending).
@@ -279,12 +283,23 @@ class MissionQueue:
             self._save()
 
     def block(self, mission_id: str) -> None:
+        """Move a mission into the terminal policy/security blocked state.
+
+        A running mission may be blocked only after its controller execution
+        has returned a blocked result. The transition remains atomic under
+        the queue lock.
+        """
         with _FileLock(self._lock_path):
             self._load()
             m = self._get_mission_or_raise(mission_id)
-            if m.state == MissionState.running:
-                # Disallow transitioning a running mission to blocked to avoid mid-flight inconsistencies
-                raise ValueError("Cannot block a running mission")
+            if m.state not in (
+                MissionState.pending,
+                MissionState.retrying,
+                MissionState.running,
+            ):
+                raise ValueError(
+                    "block() requires mission to be pending, retrying, or running"
+                )
             m.state = MissionState.blocked
             self._validate_no_cycles()
             self._save()
