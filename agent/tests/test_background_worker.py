@@ -6,7 +6,9 @@ import threading
 import time
 import types
 import unittest
+from unittest.mock import patch
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.runtime.background_worker import BackgroundWorker, cli_main
@@ -378,5 +380,173 @@ class BackgroundWorkerTests(unittest.TestCase):
             self.assertEqual(before_mtime, after_mtime)
 
 
+    @patch(
+        "agent.runtime.background_worker.ProductionExecutionReporter"
+    )
+    @patch(
+        "agent.runtime.background_worker.BackgroundWorker.run"
+    )
+    def test_cli_constructs_reporter_with_storage_dir(
+        self,
+        run_mock,
+        reporter_mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            queue_path = str(
+                Path(td) / "missions.json"
+            )
+
+            result = cli_main([
+                "--queue-path",
+                queue_path,
+                "--controller-mode",
+                "mission-runner",
+                "--execution-report-dir",
+                str(Path(td) / "execution-reports"),
+                "--project-id",
+                "mitigate-ai-platform",
+                "--once",
+            ])
+
+            self.assertEqual(
+                0,
+                result,
+            )
+
+            reporter_mock.assert_called_once_with(
+                storage_dir=str(
+                    Path(td) / "execution-reports"
+                ),
+                project_id="mitigate-ai-platform",
+            )
+
+            self.assertTrue(
+                run_mock.called
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class FakeExecutionReporter:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def persist_result(
+        self,
+        *,
+        mission,
+        controller_result,
+        worker_id,
+        final_status,
+    ):
+        self.calls.append(
+            {
+                "mission": dict(mission),
+                "controller_result": dict(
+                    controller_result
+                ),
+                "worker_id": worker_id,
+                "final_status": final_status,
+            }
+        )
+        return {"status": "completed"}
+
+
+class BackgroundWorkerExecutionReportingTests(
+    unittest.TestCase
+):
+    def test_success_persists_execution_report(
+        self,
+    ) -> None:
+        queue = FakeMissionQueue([
+            {
+                "id": "report-1",
+                "outcome": "success",
+            },
+        ])
+
+        class ReportingController:
+            def execute(self, mission):
+                return {
+                    "status": "success",
+                    "risk_level": "low",
+                    "merge_recommendation": "approve",
+                    "merged_to_main": True,
+                    "branch": (
+                        "agent/mission-report-1"
+                    ),
+                }
+
+        reporter = FakeExecutionReporter()
+
+        worker = BackgroundWorker(
+            queue=queue,
+            controller=ReportingController(),
+            once=True,
+            worker_id="production-worker",
+            poll_interval=0.01,
+            execution_reporter=reporter,
+        )
+
+        worker.run()
+
+        self.assertEqual(
+            "completed",
+            queue.get_state("report-1"),
+        )
+
+        self.assertEqual(
+            1,
+            len(reporter.calls),
+        )
+
+        call = reporter.calls[0]
+
+        self.assertEqual(
+            "report-1",
+            call["mission"]["id"],
+        )
+        self.assertEqual(
+            "production-worker",
+            call["worker_id"],
+        )
+        self.assertEqual(
+            "completed",
+            call["final_status"],
+        )
+        self.assertTrue(
+            call["controller_result"][
+                "merged_to_main"
+            ]
+        )
+
+
+class BackgroundWorkerReportingCliTests(
+    unittest.TestCase
+):
+    def test_cli_accepts_execution_reporting_options(
+        self,
+    ) -> None:
+        parser = BackgroundWorker.build_arg_parser()
+
+        args = parser.parse_args([
+            "--queue-path",
+            "/tmp/missions.json",
+            "--controller-mode",
+            "mission-runner",
+            "--execution-report-dir",
+            "/tmp/execution-reports",
+            "--project-id",
+            "mitigate-ai-platform",
+        ])
+
+        self.assertEqual(
+            "/tmp/execution-reports",
+            args.execution_report_dir,
+        )
+        self.assertEqual(
+            "mitigate-ai-platform",
+            args.project_id,
+        )

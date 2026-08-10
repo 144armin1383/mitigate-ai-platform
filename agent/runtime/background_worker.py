@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Union
 
+from agent.runtime.production_execution_reporter import (
+    ProductionExecutionReporter,
+)
+
 
 # Protocols for dependency injection
 class MissionQueueProtocol(Protocol):
@@ -98,6 +102,7 @@ class BackgroundWorker:
         poll_interval: float = 5.0,
         max_idle_cycles: Optional[int] = None,
         heartbeat_path: Optional[str] = None,
+        execution_reporter: Optional[Any] = None,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be > 0")
@@ -111,6 +116,7 @@ class BackgroundWorker:
         self.poll_interval: float = float(poll_interval)
         self.max_idle_cycles: Optional[int] = max_idle_cycles
         self.heartbeat_path: Optional[str] = heartbeat_path
+        self.execution_reporter: Optional[Any] = execution_reporter
 
         self._shutdown_requested: bool = False
         self._shutdown_event_emitted: bool = False
@@ -252,6 +258,23 @@ class BackgroundWorker:
             if status == "success":
                 self._queue.complete(mission_id)
                 self._emit("completed", mission_id=mission_id)
+
+                if (
+                    self.execution_reporter is not None
+                    and isinstance(result, dict)
+                ):
+                    try:
+                        self.execution_reporter.persist_result(
+                            mission=mission,
+                            controller_result=result,
+                            worker_id=self.worker_id,
+                            final_status="completed",
+                        )
+                    except Exception:
+                        self._emit(
+                            "execution_report_failed",
+                            mission_id=mission_id,
+                        )
             elif status == "retry":
                 # MissionQueue.fail() is the single retry-budget authority:
                 # it atomically moves running -> retrying while budget remains,
@@ -353,6 +376,18 @@ class BackgroundWorker:
             default=None,
             help="Maximum consecutive idle polling cycles before exit (default: unlimited)",
         )
+        parser.add_argument(
+            "--execution-report-dir",
+            dest="execution_report_dir",
+            default=None,
+            help="Optional directory for persisted production execution reports",
+        )
+        parser.add_argument(
+            "--project-id",
+            dest="project_id",
+            default=None,
+            help="Project identifier used for production execution reporting",
+        )
         return parser
 
 
@@ -431,6 +466,19 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
         controller_mode=str(args.controller_mode),
     )
 
+    reporter = None
+
+    if args.execution_report_dir is not None:
+        if not args.project_id:
+            raise SystemExit(
+                "project-id is required when execution-report-dir is configured"
+            )
+
+        reporter = ProductionExecutionReporter(
+            storage_dir=args.execution_report_dir,
+            project_id=str(args.project_id),
+        )
+
     worker = BackgroundWorker(
         queue=queue,
         controller=controller,
@@ -439,6 +487,7 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
         poll_interval=float(args.poll_interval),
         max_idle_cycles=args.max_idle_cycles,
         heartbeat_path=args.heartbeat_path,
+        execution_reporter=reporter,
     )
 
     worker.run()
