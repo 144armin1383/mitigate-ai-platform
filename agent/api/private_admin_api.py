@@ -398,7 +398,10 @@ class PrivateAdminAPIHandler(BaseHTTPRequestHandler):
             try:
                 mtime = os.path.getmtime(self.heartbeat_path)
                 worker_active = (now - mtime) <= float(self.config.worker_heartbeat_ttl_secs)
-                last_heartbeat = _dt.datetime.utcfromtimestamp(mtime).replace(tzinfo=_dt.timezone.utc).isoformat()
+                last_heartbeat = _dt.datetime.fromtimestamp(
+                    mtime,
+                    tz=_dt.timezone.utc,
+                ).isoformat()
             except Exception:
                 worker_active = False
                 last_heartbeat = None

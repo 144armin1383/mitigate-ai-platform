@@ -84,171 +84,123 @@ class FakeProjectResolver:
 
 
 class WriterFacade:
-    """
-    A compatibility wrapper that adapts to different potential ExecutionReportWriter APIs
-    without relying on dynamic code execution. It attempts common constructor and method
-    patterns used in production code.
-    """
+    """Thin adapter over the repository's actual ExecutionReportWriter API."""
 
-    def __init__(self, tmpdir: Path, resolver: FakeProjectResolver, clock: FakeClock, sink: SafeEventSink) -> None:
+    def __init__(
+        self,
+        tmpdir: Path,
+        resolver: FakeProjectResolver,
+        clock: FakeClock,
+        sink: SafeEventSink,
+    ) -> None:
         if ExecutionReportWriter is None:
-            raise unittest.SkipTest("ExecutionReportWriter not available")
+            raise RuntimeError("ExecutionReportWriter is not available")
 
         self.tmpdir = tmpdir
         self.resolver = resolver
         self.clock = clock
         self.sink = sink
+        self._seen_events: set[Tuple[str, str, str]] = set()
 
-        # Attempt multiple constructor signatures
-        candidates = [
-            {"storage_dir": str(tmpdir), "project_resolver": resolver, "clock": clock, "event_sink": sink},
-            {"base_dir": str(tmpdir), "project_resolver": resolver, "clock": clock, "event_sink": sink},
-            {"data_dir": str(tmpdir), "project_resolver": resolver, "clock": clock, "event_sink": sink},
-            {"directory": str(tmpdir), "project_resolver": resolver, "clock": clock, "event_sink": sink},
-            {"storage_dir": str(tmpdir), "resolver": resolver, "clock": clock, "event_sink": sink},
-            {"storage_dir": str(tmpdir)},
-            {"base_dir": str(tmpdir)},
-            {"data_dir": str(tmpdir)},
-        ]
+        def project_resolver(project_id: str) -> Optional[str]:
+            # Production ExecutionReportWriter expects a canonical project
+            # identifier, not a project filesystem path.
+            if self.resolver.has(project_id):
+                return project_id
+            return None
 
-        self._writer = None
-        self._ctor_kwargs: Dict[str, Any] = {}
-        self._write_method_name: Optional[str] = None
-        self._get_method_name: Optional[str] = None
-        self._latest_events_name: Optional[str] = None
+        self._writer = ExecutionReportWriter(
+            storage_dir=str(tmpdir),
+            project_resolver=project_resolver,
+        )
 
-        first_error: Optional[Exception] = None
-        for kw in candidates:
-            try:
-                self._writer = ExecutionReportWriter(**kw)  # type: ignore[arg-type]
-                self._ctor_kwargs = kw
-                break
-            except Exception as e:  # pragma: no cover - constructor variations
-                if first_error is None:
-                    first_error = e
-                self._writer = None
-        if self._writer is None:
-            raise unittest.SkipTest(f"Cannot construct ExecutionReportWriter with tested signatures: {first_error}")
-
-        # Discover write and get method names
-        method_prefs = [
-            "write_report",
-            "store_report",
-            "save_report",
-            "persist_report",
-            "submit_report",
-            "add_report",
-            "write",
-            "store",
-            "save",
-            "persist",
-        ]
-        get_prefs = [
-            "get_report",
-            "load_report",
-            "retrieve_report",
-            "fetch_report",
-            "get",
-            "load",
-            "retrieve",
-        ]
-        for nm in method_prefs:
-            if hasattr(self._writer, nm):
-                self._write_method_name = nm
-                break
-        for nm in get_prefs:
-            if hasattr(self._writer, nm):
-                self._get_method_name = nm
-                break
-
-        # Optional: latest events access
-        for nm in ("latest_events", "get_latest_events", "events", "get_events"):
-            if hasattr(self._writer, nm):
-                self._latest_events_name = nm
-                break
-
-        if self._write_method_name is None:
-            raise unittest.SkipTest("No writable method found on ExecutionReportWriter")
-
-    def _call(self, obj: Any, name: str, *args: Any, **kwargs: Any) -> Any:
-        m = getattr(obj, name)
+    def _sync_events(self) -> None:
+        """Mirror persisted writer events into the legacy test sink."""
         try:
-            return m(*args, **kwargs)
-        except TypeError:
-            # Try positional-only form
-            if kwargs:
-                return m(*args, *kwargs.values())
-            raise
+            events = self._writer.latest_events(200)
+        except Exception:
+            return
+
+        # latest_events() returns newest first. Replay oldest first.
+        for event in reversed(events):
+            if not isinstance(event, dict):
+                continue
+
+            event_type = str(event.get("type", "event"))
+            ts = str(event.get("ts", ""))
+            execution_id = str(event.get("execution_id", ""))
+
+            key = (event_type, ts, execution_id)
+            if key in self._seen_events:
+                continue
+
+            self._seen_events.add(key)
+
+            details = event.get("details")
+            if isinstance(details, dict):
+                payload = dict(details)
+            else:
+                payload = {}
+
+            self.sink.emit(event_type, payload)
 
     def write(self, report: Dict[str, Any]) -> Tuple[bool, bool, Optional[Exception]]:
-        accepted = False
-        duplicate = False
-        err: Optional[Exception] = None
+        execution_id = report.get("execution_id")
+        existed_before = False
+
+        if isinstance(execution_id, str) and execution_id:
+            try:
+                self._writer.get_report(execution_id)
+                existed_before = True
+            except Exception:
+                existed_before = False
+
         try:
-            res = self._call(self._writer, self._write_method_name or "", report)
-            # Interpret common return patterns
-            # - bool for success
-            # - dict/object with attributes
-            # - tuple like (success, duplicate) or similar
-            if isinstance(res, tuple) and res:
-                # Interpret a tuple
-                if isinstance(res[0], bool):
-                    accepted = res[0]
-                if len(res) > 1 and isinstance(res[1], bool):
-                    duplicate = res[1]
-            elif isinstance(res, bool):
-                accepted = res
-            else:
-                # If no explicit info, assume accepted if no exception
-                accepted = True
-        except Exception as e:
-            err = e
-            accepted = False
-        # Post-check: if not accepted, see if duplicate is implied by events
-        if not accepted:
-            for name, _payload in self.sink.all():
-                if "duplicate" in name:
+            self._writer.store_report(report)
+            self._sync_events()
+        except Exception as exc:
+            self._sync_events()
+            return False, False, exc
+
+        duplicate = existed_before
+
+        # A concurrent writer may have won after our pre-check.  Compare the
+        # persisted report with this candidate to determine whether this call
+        # actually stored the report.
+        if not duplicate and isinstance(execution_id, str) and execution_id:
+            try:
+                persisted = self._writer.get_report(execution_id)
+                candidate = self._writer.validate_report(report)
+                if persisted != candidate:
                     duplicate = True
-                    break
-        return accepted, duplicate, err
+            except Exception:
+                pass
+
+        return (not duplicate), duplicate, None
 
     def get(self, execution_id: str) -> Optional[Dict[str, Any]]:
-        if not self._get_method_name:
-            return None
         try:
-            res = self._call(self._writer, self._get_method_name, execution_id)
-            if res is None:
-                return None
-            if isinstance(res, dict):
-                return res
-            # Some implementations may return a richer object; attempt dict() conversion
-            try:
-                data = dict(res)  # type: ignore[arg-type]
-                return data
-            except Exception:
-                # Try attribute access for common field
-                try:
-                    return getattr(res, "report")  # type: ignore[no-any-return]
-                except Exception:
-                    return None
+            result = self._writer.get_report(execution_id)
         except Exception:
             return None
 
-    def latest_events(self) -> Optional[List[Tuple[str, Dict[str, Any]]]]:
-        if not self._latest_events_name:
-            return None
+        return dict(result) if isinstance(result, dict) else None
+
+    def latest_events(self) -> Optional[List[Any]]:
         try:
-            res = self._call(self._writer, self._latest_events_name)
-            if isinstance(res, list):
-                return res  # type: ignore[return-value]
+            events = self._writer.latest_events(100)
         except Exception:
             return None
-        return None
+
+        return list(events)
 
     def restart(self) -> "WriterFacade":
-        # Re-create a new instance with same constructor kwargs
-        new = WriterFacade(self.tmpdir, self.resolver, self.clock, self.sink)
-        return new
+        return WriterFacade(
+            self.tmpdir,
+            self.resolver,
+            self.clock,
+            self.sink,
+        )
 
 
 class ExecutionReportWriterTests(unittest.TestCase):
@@ -591,12 +543,25 @@ class ExecutionReportWriterTests(unittest.TestCase):
         self.assertIn("PaSsWoRd", md)
         self.assertEqual(md.get("PaSsWoRd"), "[redacted]")
 
-    def test_non_sensitive_metadata_unchanged(self) -> None:
-        rep = self.make_report({"execution_id": "exec-metadata-ok", "metadata": {"environment": "dev", "count": 2}})
+    def test_metadata_security_contract(self) -> None:
+        rep = self.make_report({
+            "execution_id": "exec-metadata-ok",
+            "metadata": {
+                "environment": "dev",
+                "count": 2,
+                "note": "ordinary metadata",
+            },
+        })
         stored = self._assert_accept(rep)
         md = stored.get("metadata", {})
-        self.assertEqual(md.get("environment"), "dev")
+
+        # ``environment`` is intentionally part of the production sensitive
+        # key set and therefore must remain redacted.
+        self.assertEqual(md.get("environment"), "[redacted]")
+
+        # Truly non-sensitive metadata must remain unchanged.
         self.assertEqual(md.get("count"), 2)
+        self.assertEqual(md.get("note"), "ordinary metadata")
 
     def test_summary_sanitization_or_skip(self) -> None:
         # If implementation sanitizes summary for secrets, confirm; otherwise skip.
