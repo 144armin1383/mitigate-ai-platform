@@ -8,6 +8,10 @@ import os
 import sys
 import threading
 
+from agent.runtime.autonomous_runtime_adapter import AutonomousRuntimeAdapter
+from agent.runtime.background_worker import BackgroundWorker
+from agent.runtime.mission_queue import MissionQueue
+
 __all__ = [
     "ApplicationConfig",
     "ApplicationContainer",
@@ -683,13 +687,29 @@ def build_application(config: ApplicationConfig, overrides: Optional[Mapping[str
             constructed_count += 1
             container.emit("service_constructed", service=name, environment_name=config.environment_name, constructed=constructed_count)
 
-        # 15. Background Worker (no threads started)
+        # 15. Background Worker
+        #
+        # Runtime wiring is activated only when a concrete autonomous_controller
+        # is supplied through overrides. Construction itself has no background
+        # side effects: BackgroundWorker.run() is never called here.
         name = "background_worker"
         maybe_fail(name)
         if name in overrides:
             inst = overrides[name]
             register(name, inst)
             container.emit("service_override_applied", service=name, environment_name=config.environment_name)
+        elif "autonomous_controller" in overrides:
+            queue_path = str(normalized_paths["queue_root"] / "missions.json")
+            queue = MissionQueue(queue_path)
+            adapter = AutonomousRuntimeAdapter(overrides["autonomous_controller"])
+            inst = BackgroundWorker(
+                queue=queue,
+                controller=adapter,
+                worker_id="application-worker",
+            )
+            register(name, inst)
+            constructed_count += 1
+            container.emit("service_constructed", service=name, environment_name=config.environment_name, constructed=constructed_count)
         else:
             deps = {"planner_queue_flow": services["planner_queue_flow"]}
             inst = _construct_service_stub(name, deps, config)
