@@ -50,9 +50,20 @@ class RuntimeWorkerSystemdDeploymentTests(unittest.TestCase):
     def test_worker_uses_sigterm(self):
         self.assertIn("KillSignal=SIGTERM", self.content)
 
+    def test_worker_can_write_only_required_runtime_repository(self):
+        self.assertIn(
+            "/srv/mitigate/mitigate-ai-platform",
+            self.content,
+        )
+        self.assertIn(
+            "ReadWritePaths=",
+            self.content,
+        )
+
     def test_worker_has_restricted_write_paths(self):
         self.assertIn(
-            "ReadWritePaths=/srv/mitigate/data /var/log/mitigate-ai",
+            "ReadWritePaths=/srv/mitigate/mitigate-ai-platform "
+            "/srv/mitigate/data /var/log/mitigate-ai",
             self.content,
         )
 
