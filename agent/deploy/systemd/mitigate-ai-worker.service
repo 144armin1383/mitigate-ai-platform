@@ -1,0 +1,41 @@
+[Unit]
+Description=MITIGATE AI Autonomous Background Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/srv/mitigate/mitigate-ai-platform
+EnvironmentFile=/etc/mitigate-ai/runtime.env
+
+ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.background_worker --queue-path /srv/mitigate/data/runtime/missions.json --worker-id production-worker --poll-interval 5 --heartbeat-path /srv/mitigate/data/runtime/worker.heartbeat
+
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+UMask=0077
+
+ReadWritePaths=/srv/mitigate/data /var/log/mitigate-ai
+RuntimeDirectory=mitigate-ai-worker
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

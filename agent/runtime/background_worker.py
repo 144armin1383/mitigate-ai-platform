@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Union
 
 
@@ -96,6 +97,7 @@ class BackgroundWorker:
         worker_id: Optional[str] = None,
         poll_interval: float = 5.0,
         max_idle_cycles: Optional[int] = None,
+        heartbeat_path: Optional[str] = None,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be > 0")
@@ -108,6 +110,7 @@ class BackgroundWorker:
         self.worker_id: str = worker_id if worker_id is not None else "worker"
         self.poll_interval: float = float(poll_interval)
         self.max_idle_cycles: Optional[int] = max_idle_cycles
+        self.heartbeat_path: Optional[str] = heartbeat_path
 
         self._shutdown_requested: bool = False
         self._shutdown_event_emitted: bool = False
@@ -158,6 +161,27 @@ class BackgroundWorker:
                 record[k] = v
         self.events.append(record)
 
+    # Runtime heartbeat
+    def _write_heartbeat(self) -> None:
+        """Atomically refresh the worker heartbeat file when configured."""
+        if not self.heartbeat_path:
+            return
+
+        path = Path(self.heartbeat_path)
+        tmp_path = path.with_name(path.name + ".tmp")
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path.write_text(_utc_timestamp() + "\n", encoding="utf-8")
+            tmp_path.replace(path)
+        except OSError:
+            # Heartbeat observability must never corrupt mission execution.
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._emit("heartbeat_failed")
+
     # Recovery on startup
     def _recover_once(self) -> None:
         if self._recovered:
@@ -179,8 +203,11 @@ class BackgroundWorker:
         Run the worker loop. In once mode, perform a single polling/processing cycle.
         """
         self._recover_once()
+        self._write_heartbeat()
 
         while True:
+            self._write_heartbeat()
+
             # Exclusive claim is the only acquisition boundary
             mission: Optional[Dict[str, Any]] = self._queue.claim(self.worker_id)
 
@@ -292,6 +319,12 @@ class BackgroundWorker:
             help="Identifier for this worker instance",
         )
         parser.add_argument(
+            "--heartbeat-path",
+            dest="heartbeat_path",
+            default=None,
+            help="Optional path to atomically refreshed worker heartbeat file",
+        )
+        parser.add_argument(
             "--max-idle-cycles",
             dest="max_idle_cycles",
             type=int,
@@ -359,6 +392,7 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
         worker_id=str(args.worker_id),
         poll_interval=float(args.poll_interval),
         max_idle_cycles=args.max_idle_cycles,
+        heartbeat_path=args.heartbeat_path,
     )
 
     worker.run()
