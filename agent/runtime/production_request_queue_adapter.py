@@ -148,7 +148,7 @@ class ProductionRequestQueueAdapter:
                 deliverables.append(candidate)
 
         deliverables_block = "".join(
-            f"- {item}\\n"
+            f"- {item}\n"
             for item in deliverables
         )
 

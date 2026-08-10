@@ -122,6 +122,16 @@ class ProductionDeliverablesContractTests(unittest.TestCase):
                 text,
             )
 
+            self.assertIn(
+                "- docs/runtime/FIRST_PRODUCTION_E2E.md\n",
+                text,
+            )
+
+            self.assertNotIn(
+                "FIRST_PRODUCTION_E2E.md\\\\n",
+                text,
+            )
+
     def test_runner_extracts_docs_deliverable(self) -> None:
         mission = """
 # Production smoke
