@@ -319,6 +319,16 @@ class BackgroundWorker:
             help="Identifier for this worker instance",
         )
         parser.add_argument(
+            "--controller-mode",
+            dest="controller_mode",
+            choices=("noop", "mission-runner"),
+            default="noop",
+            help=(
+                "Controller implementation. "
+                "Use mission-runner for production autonomous execution."
+            ),
+        )
+        parser.add_argument(
             "--heartbeat-path",
             dest="heartbeat_path",
             default=None,
@@ -334,11 +344,32 @@ class BackgroundWorker:
         return parser
 
 
-def _construct_queue_and_controller(queue_path: str) -> tuple[MissionQueueProtocol, AutonomousControllerProtocol]:
+def _construct_queue_and_controller(
+    queue_path: str,
+    controller_mode: str = "noop",
+) -> tuple[MissionQueueProtocol, AutonomousControllerProtocol]:
     """
-    Best-effort construction of queue and controller for CLI context.
-    Falls back to internal minimal implementations to avoid side effects.
+    Construct the runtime queue/controller pair.
+
+    Production mission-runner mode is explicit and fail-closed.
+    The historical noop mode remains available for maintenance/tests.
     """
+
+    if controller_mode == "mission-runner":
+        from agent.runtime.mission_queue import MissionQueue
+        from agent.runtime.production_mission_controller import (
+            ProductionMissionController,
+        )
+
+        return (
+            MissionQueue(queue_path),
+            ProductionMissionController(),
+        )
+
+    if controller_mode != "noop":
+        raise ValueError(
+            f"Unsupported controller mode: {controller_mode}"
+        )
     # Attempt to discover external implementations, but do not require them
     queue: MissionQueueProtocol = _DirectoryIdleQueue(queue_path)
     controller: AutonomousControllerProtocol = _NoOpController()
@@ -383,7 +414,10 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
     if args.max_idle_cycles is not None and args.max_idle_cycles < 0:
         raise SystemExit("max-idle-cycles must be >= 0 or omitted")
 
-    queue, controller = _construct_queue_and_controller(args.queue_path)
+    queue, controller = _construct_queue_and_controller(
+        args.queue_path,
+        controller_mode=str(args.controller_mode),
+    )
 
     worker = BackgroundWorker(
         queue=queue,

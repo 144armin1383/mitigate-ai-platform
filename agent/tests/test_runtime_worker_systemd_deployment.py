@@ -32,6 +32,12 @@ class RuntimeWorkerSystemdDeploymentTests(unittest.TestCase):
             self.content,
         )
 
+    def test_worker_uses_production_controller(self):
+        self.assertIn(
+            "--controller-mode mission-runner",
+            self.content,
+        )
+
     def test_worker_has_heartbeat_path(self):
         self.assertIn(
             "--heartbeat-path /srv/mitigate/data/runtime/worker.heartbeat",
