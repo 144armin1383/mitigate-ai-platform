@@ -63,7 +63,14 @@ class RuntimeWorkerSystemdDeploymentTests(unittest.TestCase):
     def test_worker_has_restricted_write_paths(self):
         self.assertIn(
             "ReadWritePaths=/srv/mitigate/mitigate-ai-platform "
-            "/srv/mitigate/data /var/log/mitigate-ai",
+            "/srv/mitigate/data /srv/mitigate/ai-logs "
+            "/var/log/mitigate-ai",
+            self.content,
+        )
+
+    def test_worker_can_write_mission_runner_log_directory(self):
+        self.assertIn(
+            "/srv/mitigate/ai-logs",
             self.content,
         )
 

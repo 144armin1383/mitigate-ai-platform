@@ -33,7 +33,7 @@ RestrictNamespaces=true
 SystemCallArchitectures=native
 UMask=0077
 
-ReadWritePaths=/srv/mitigate/mitigate-ai-platform /srv/mitigate/data /var/log/mitigate-ai
+ReadWritePaths=/srv/mitigate/mitigate-ai-platform /srv/mitigate/data /srv/mitigate/ai-logs /var/log/mitigate-ai
 RuntimeDirectory=mitigate-ai-worker
 RuntimeDirectoryMode=0750
 
