@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from agent.git.review_engine import GitReviewEngine
+
 
 MISSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
@@ -62,6 +64,194 @@ class ProductionMissionController:
             check=False,
         )
         return result.returncode == 0
+
+    def _mission_branch(self, mission_name: str) -> Optional[str]:
+        prefix = f"agent/mission-{mission_name.replace('_', '-')}-"
+
+        result = subprocess.run(
+            [
+                "git",
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname:short)",
+                "refs/heads/agent/mission-*",
+            ],
+            cwd=self.repository_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            return None
+
+        for line in result.stdout.splitlines():
+            branch = line.strip()
+
+            if branch.startswith(prefix):
+                return branch
+
+        return None
+
+    def _review_and_merge(
+        self,
+        mission_name: str,
+    ) -> Dict[str, Any]:
+        branch = self._mission_branch(mission_name)
+
+        if not branch:
+            return {
+                "status": "blocked",
+                "reason": "mission_branch_not_found",
+            }
+
+        review = GitReviewEngine(
+            str(self.repository_root)
+        ).review(
+            "main",
+            branch,
+        )
+
+        validation = review.get(
+            "validation",
+            {},
+        )
+
+        if not validation.get("ok", False):
+            return {
+                "status": "blocked",
+                "reason": "git_review_failed",
+                "branch": branch,
+                "risk_level": review.get("risk_level"),
+                "merge_recommendation": review.get(
+                    "merge_recommendation"
+                ),
+            }
+
+        risk_level = review.get("risk_level")
+        recommendation = review.get(
+            "merge_recommendation"
+        )
+
+        if (
+            risk_level != "low"
+            or recommendation != "approve"
+        ):
+            return {
+                "status": "blocked",
+                "reason": "manual_review_required",
+                "branch": branch,
+                "risk_level": risk_level,
+                "merge_recommendation": recommendation,
+            }
+
+        base_head = subprocess.run(
+            [
+                "git",
+                "rev-parse",
+                "HEAD",
+            ],
+            cwd=self.repository_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        if base_head.returncode != 0:
+            return {
+                "status": "blocked",
+                "reason": "main_head_resolution_failed",
+                "branch": branch,
+                "risk_level": risk_level,
+                "merge_recommendation": recommendation,
+            }
+
+        original_main_head = base_head.stdout.strip()
+
+        if not original_main_head:
+            return {
+                "status": "blocked",
+                "reason": "main_head_resolution_failed",
+                "branch": branch,
+                "risk_level": risk_level,
+                "merge_recommendation": recommendation,
+            }
+
+        merge = subprocess.run(
+            [
+                "git",
+                "merge",
+                "--ff-only",
+                branch,
+            ],
+            cwd=self.repository_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        if merge.returncode != 0:
+            return {
+                "status": "blocked",
+                "reason": "fast_forward_merge_failed",
+                "branch": branch,
+                "risk_level": risk_level,
+                "merge_recommendation": recommendation,
+            }
+
+        push = subprocess.run(
+            [
+                "git",
+                "push",
+                "origin",
+                "main",
+            ],
+            cwd=self.repository_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        if push.returncode != 0:
+            rollback = subprocess.run(
+                [
+                    "git",
+                    "reset",
+                    "--hard",
+                    original_main_head,
+                ],
+                cwd=self.repository_root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            if rollback.returncode != 0:
+                return {
+                    "status": "blocked",
+                    "reason": "main_push_failed_rollback_failed",
+                    "branch": branch,
+                    "risk_level": risk_level,
+                    "merge_recommendation": recommendation,
+                }
+
+            return {
+                "status": "blocked",
+                "reason": "main_push_failed",
+                "branch": branch,
+                "risk_level": risk_level,
+                "merge_recommendation": recommendation,
+                "local_main_rolled_back": True,
+            }
+
+        return {
+            "status": "success",
+            "reason": None,
+            "branch": branch,
+            "risk_level": risk_level,
+            "merge_recommendation": recommendation,
+            "merged_to_main": True,
+        }
 
     @staticmethod
     def _safe_output(text: str, limit: int = 4000) -> str:
@@ -144,11 +334,11 @@ class ProductionMissionController:
             }
 
         if result.returncode == 0:
-            return {
-                "status": "success",
-                "reason": None,
-                "returncode": 0,
-            }
+            merge_result = self._review_and_merge(
+                mission_name
+            )
+            merge_result["returncode"] = 0
+            return merge_result
 
         if "SELF_HEALING_BLOCKED" in safe_output:
             status = "blocked"
