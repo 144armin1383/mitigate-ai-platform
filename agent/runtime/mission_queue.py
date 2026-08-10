@@ -243,6 +243,41 @@ class MissionQueue:
             self._save()
             return chosen.to_dict()
 
+    def recover_stale(self, worker_id: str) -> List[str]:
+        """Recover missions stranded in running state after process restart.
+
+        A persisted running mission has no durable worker ownership metadata,
+        so after a fresh worker starts it must be treated as abandoned.
+
+        Recovery does not consume retry budget: process interruption is not a
+        mission execution failure. Recovered missions become retrying and are
+        eligible for the normal atomic claim path.
+
+        Terminal and already-runnable states are left unchanged.
+        ``worker_id`` is accepted for BackgroundWorker protocol compatibility.
+        """
+        del worker_id
+
+        with _FileLock(self._lock_path):
+            self._load()
+
+            recovered = [
+                m
+                for m in self._missions.values()
+                if m.state == MissionState.running
+            ]
+            recovered.sort(key=lambda m: (-m.priority, m.created_seq, m.id))
+
+            if not recovered:
+                return []
+
+            for mission in recovered:
+                mission.state = MissionState.retrying
+
+            self._validate_no_cycles()
+            self._save()
+            return [mission.id for mission in recovered]
+
     def complete(self, mission_id: str) -> None:
         with _FileLock(self._lock_path):
             self._load()
