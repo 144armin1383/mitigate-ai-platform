@@ -266,8 +266,20 @@ class BackgroundWorker:
             elif status == "blocked":
                 # Policy/security failure path
                 self._queue.block(mission_id)
-                # Use failed event with reason to adhere to the logging contract while signaling blockage
-                self._emit("failed", mission_id=mission_id, reason="blocked")
+
+                reason = "blocked"
+
+                if isinstance(result, dict):
+                    controller_reason = result.get("reason")
+
+                    if controller_reason:
+                        reason = str(controller_reason)
+
+                self._emit(
+                    "failed",
+                    mission_id=mission_id,
+                    reason=reason,
+                )
             else:
                 # Unknown controller output fails closed. Do not create an
                 # implicit retry path outside the established retry authority.

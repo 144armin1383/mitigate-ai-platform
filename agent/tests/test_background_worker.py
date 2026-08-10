@@ -207,6 +207,45 @@ class BackgroundWorkerTests(unittest.TestCase):
                 break
         self.assertTrue(found)
 
+    def test_blocked_controller_reason_is_preserved(self) -> None:
+        queue = FakeMissionQueue([
+            {"id": "blocked-reason", "outcome": "blocked"},
+        ])
+
+        class ReasonController:
+            def execute(self, mission):
+                return {
+                    "status": "blocked",
+                    "reason": "dirty_repository",
+                }
+
+        worker = BackgroundWorker(
+            queue=queue,
+            controller=ReasonController(),
+            once=True,
+            poll_interval=0.01,
+        )
+
+        worker.run()
+
+        self.assertEqual(
+            queue.get_state("blocked-reason"),
+            "blocked",
+        )
+
+        failed = [
+            event
+            for event in worker.events
+            if event["event"] == "failed"
+            and event.get("mission_id") == "blocked-reason"
+        ]
+
+        self.assertEqual(1, len(failed))
+        self.assertEqual(
+            "dirty_repository",
+            failed[0].get("reason"),
+        )
+
     def test_graceful_shutdown(self) -> None:
         queue = FakeMissionQueue([])
         controller = FakeController(queue)

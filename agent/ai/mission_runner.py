@@ -56,12 +56,51 @@ def run_git(
     )
 
 
-def require_clean_repository() -> None:
-    """Stop when uncommitted repository changes are present."""
+def require_clean_repository(
+    *,
+    allowed_untracked_path: Path | None = None,
+) -> None:
+    """Stop when unexpected uncommitted repository changes are present."""
 
-    result = run_git("status", "--porcelain")
+    result = run_git(
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+    )
 
-    if result.stdout.strip():
+    allowed_relative: str | None = None
+
+    if allowed_untracked_path is not None:
+        resolved = allowed_untracked_path.resolve()
+
+        try:
+            allowed_relative = resolved.relative_to(
+                REPOSITORY_ROOT.resolve()
+            ).as_posix()
+        except ValueError as exc:
+            raise MissionError(
+                "Allowed runtime input escapes repository."
+            ) from exc
+
+    unexpected: list[str] = []
+
+    for raw_line in result.stdout.splitlines():
+        if not raw_line.strip():
+            continue
+
+        status = raw_line[:2]
+        path_text = raw_line[3:]
+
+        if (
+            allowed_relative is not None
+            and status == "??"
+            and path_text == allowed_relative
+        ):
+            continue
+
+        unexpected.append(raw_line)
+
+    if unexpected:
         raise MissionError(
             "Repository is not clean. Commit or restore changes first."
         )
@@ -647,10 +686,12 @@ def run_mission(mission_name: str) -> int:
     global LAST_SELF_HEALING_AUDIT
     LAST_SELF_HEALING_AUDIT = None
 
-    require_clean_repository()
-    require_main_branch()
-
     mission_path, mission = load_mission(mission_name)
+
+    require_clean_repository(
+        allowed_untracked_path=mission_path,
+    )
+    require_main_branch()
     deliverables = extract_deliverables(mission)
 
     if not openai_provider.is_available():
