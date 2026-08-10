@@ -82,24 +82,34 @@ class _InterProcessFileLock:
             if self._owner != threading.get_ident():
                 # Only the owner can release; ignore spurious releases to be safe.
                 return
+
             fh = self._fh
-            fileno = fh.fileno()
-            if os.name == "nt":
-                import msvcrt  # type: ignore
+            try:
+                fileno = fh.fileno()
+                if os.name == "nt":
+                    import msvcrt  # type: ignore
 
-                try:
-                    fh.seek(0)
-                    msvcrt.locking(fileno, msvcrt.LK_UNLCK, 1)
-                except OSError as e:  # pragma: no cover - platform specific
-                    raise StorageError(f"Failed to release lock: {e}") from e
-            else:
-                import fcntl  # type: ignore
+                    try:
+                        fh.seek(0)
+                        msvcrt.locking(fileno, msvcrt.LK_UNLCK, 1)
+                    except OSError as e:  # pragma: no cover - platform specific
+                        raise StorageError(f"Failed to release lock: {e}") from e
+                else:
+                    import fcntl  # type: ignore
 
+                    try:
+                        fcntl.flock(fileno, fcntl.LOCK_UN)
+                    except OSError as e:  # pragma: no cover - platform specific
+                        raise StorageError(f"Failed to release lock: {e}") from e
+            finally:
+                # The lock object is long-lived, but the underlying file handle
+                # must not be. Close it after every release so repeated writer
+                # instances and test teardown cannot leak descriptors.
                 try:
-                    fcntl.flock(fileno, fcntl.LOCK_UN)
-                except OSError as e:  # pragma: no cover - platform specific
-                    raise StorageError(f"Failed to release lock: {e}") from e
-            self._owner = None
+                    fh.close()
+                finally:
+                    self._fh = None
+                    self._owner = None
 
     def __enter__(self) -> "_InterProcessFileLock":
         self.acquire()
