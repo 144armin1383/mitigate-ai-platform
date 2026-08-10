@@ -123,6 +123,26 @@ class ProductionRuntimeAPITests(
                 ]
             )
 
+    def test_status_alias_matches_runtime_status(self):
+        flow = FakeRequestFlow()
+
+        runtime = ProductionRuntimeFacade(flow)
+        runtime.start()
+
+        self.assertEqual(
+            runtime.status(),
+            runtime.runtime_status(),
+        )
+
+        self.assertEqual(
+            runtime.status()["state"],
+            "running",
+        )
+
+        self.assertTrue(
+            runtime.status()["application_ready"]
+        )
+
     def test_runtime_status_stops_cleanly(
         self,
     ):

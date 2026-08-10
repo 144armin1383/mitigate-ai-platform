@@ -79,6 +79,10 @@ class ProductionRuntimeFacade:
             "warnings": [],
         }
 
+    def status(self) -> dict[str, Any]:
+        """Compatibility status interface used by RuntimePrivateAPI."""
+        return self.runtime_status()
+
     def latest_events(
         self,
         limit: int,
