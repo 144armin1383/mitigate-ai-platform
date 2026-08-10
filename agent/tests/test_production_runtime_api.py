@@ -123,6 +123,83 @@ class ProductionRuntimeAPITests(
                 ]
             )
 
+    def test_real_production_request_reaches_queue(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            queue_path = (
+                root
+                / "data"
+                / "missions.json"
+            )
+
+            runtime = build_production_runtime(
+                project_id="mitigate",
+                queue_path=queue_path,
+                repository_root=root,
+            )
+
+            runtime.start()
+
+            result = runtime.submit_request(
+                {
+                    "request_id": (
+                        "req-production-e2e-1"
+                    ),
+                    "project_id": "mitigate",
+                    "conversation_id": (
+                        "conv-production-e2e-1"
+                    ),
+                    "user_message": (
+                        "Create a production "
+                        "request contract "
+                        "smoke mission."
+                    ),
+                    "upload_ids": [],
+                    "requested_task_type": (
+                        "testing"
+                    ),
+                    "created_at": (
+                        "2026-08-10T12:00:00+00:00"
+                    ),
+                }
+            )
+
+            self.assertTrue(
+                result["accepted"],
+                result,
+            )
+
+            self.assertEqual(
+                result["project_id"],
+                "mitigate",
+            )
+
+            self.assertEqual(
+                len(result["mission_ids"]),
+                1,
+            )
+
+            mission_id = (
+                result["mission_ids"][0]
+            )
+
+            self.assertTrue(
+                queue_path.exists()
+            )
+
+            definition_path = (
+                root
+                / "agent"
+                / "missions"
+                / f"{mission_id}.md"
+            )
+
+            self.assertTrue(
+                definition_path.exists()
+            )
+
     def test_status_alias_matches_runtime_status(self):
         flow = FakeRequestFlow()
 

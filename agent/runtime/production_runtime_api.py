@@ -15,6 +15,9 @@ from agent.api.runtime_private_api import (
 from agent.runtime.production_request_composition import (
     build_production_request_composition,
 )
+from agent.orchestrator.request_gate_selector import (
+    ModelInfo,
+)
 
 
 class ProductionRuntimeFacade:
@@ -133,11 +136,137 @@ class StaticProjectRegistry:
             ),
         }
 
+    def conversation_belongs_to_project(
+        self,
+        conversation_id: str,
+        project_id: str,
+    ) -> bool:
+        return (
+            project_id == self.project_id
+            and isinstance(conversation_id, str)
+            and bool(conversation_id.strip())
+        )
+
+    def upload_belongs_to_project(
+        self,
+        upload_id: str,
+        project_id: str,
+    ) -> bool:
+        return (
+            project_id == self.project_id
+            and isinstance(upload_id, str)
+            and bool(upload_id.strip())
+        )
+
 
 @dataclass
 class StaticProviderRegistry:
+    project_id: str
     provider_id: str
     model_id: str
+
+    _SUPPORTED_TASK_TYPES = {
+        "general",
+        "wordpress",
+        "github",
+        "deployment",
+        "seo",
+        "content",
+        "infrastructure",
+        "testing",
+        "documentation",
+        "api",
+        "backend",
+        "frontend",
+        "security",
+        "database",
+    }
+
+    def is_task_supported(
+        self,
+        project_id: str,
+        task_type: str,
+    ) -> bool:
+        return (
+            project_id == self.project_id
+            and task_type in self._SUPPORTED_TASK_TYPES
+        )
+
+    def requires_tools(
+        self,
+        task_type: str,
+    ) -> bool:
+        return False
+
+    def _model_info(self) -> ModelInfo:
+        return ModelInfo(
+            project_id=self.project_id,
+            provider_id=self.provider_id,
+            model_id=self.model_id,
+            supports_vision=True,
+            supports_tools=True,
+            enabled=True,
+            available=True,
+            deprecated=False,
+        )
+
+    def explicit_model_allowed(
+        self,
+        project_id: str,
+        task_type: str,
+        provider_id: str,
+        model_id: str,
+    ) -> Optional[ModelInfo]:
+        if not self.is_task_supported(
+            project_id,
+            task_type,
+        ):
+            return None
+
+        if provider_id != self.provider_id:
+            return None
+
+        if model_id != self.model_id:
+            return None
+
+        return self._model_info()
+
+    def select_default_model(
+        self,
+        project_id: str,
+        task_type: str,
+        requires_vision: bool,
+        requires_tools: bool,
+        requested_provider_id: Optional[str] = None,
+    ) -> Optional[ModelInfo]:
+        if not self.is_task_supported(
+            project_id,
+            task_type,
+        ):
+            return None
+
+        if (
+            requested_provider_id is not None
+            and requested_provider_id
+            != self.provider_id
+        ):
+            return None
+
+        model = self._model_info()
+
+        if (
+            requires_vision
+            and not model.supports_vision
+        ):
+            return None
+
+        if (
+            requires_tools
+            and not model.supports_tools
+        ):
+            return None
+
+        return model
 
     def select_model(
         self,
@@ -161,6 +290,15 @@ class StaticProviderRegistry:
 
 
 class AllowBudgetEvaluator:
+    def preflight(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, str]:
+        return {
+            "status": "allow",
+        }
+
     def evaluate(
         self,
         *args: Any,
@@ -172,6 +310,15 @@ class AllowBudgetEvaluator:
 
 
 class AllowRateLimiter:
+    def check_and_register(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, bool]:
+        return {
+            "allowed": True,
+        }
+
     def allow(
         self,
         *args: Any,
@@ -219,6 +366,7 @@ def build_production_runtime(
 
     provider_registry = (
         StaticProviderRegistry(
+            project_id=project_id,
             provider_id=provider_id,
             model_id=model_id,
         )

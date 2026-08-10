@@ -1,5 +1,6 @@
 import http.client
 import inspect
+import json
 import socket
 import threading
 import time
@@ -56,6 +57,20 @@ class FakeRuntimeService:
     def __init__(self) -> None:
         self.calls = []  # type: list[tuple[str, tuple, dict]]
         self.running = True
+        self.submit_result = {
+            "accepted": True,
+            "request_id": "req-0001",
+            "project_id": "mitigate",
+            "conversation_id": "conv-0001",
+            "provider_id": "production",
+            "model_id": "production",
+            "task_type": "testing",
+            "plan_id": "plan-0001",
+            "plan_summary": "Test plan",
+            "mission_ids": ["m-0001"],
+            "warning": None,
+            "created_at": "2026-08-10T12:00:00+00:00",
+        }
 
     # Status
     def runtime_status(self) -> dict:
@@ -87,8 +102,10 @@ class FakeRuntimeService:
 
     # Request submission
     def submit_request(self, request: dict) -> dict:
-        self.calls.append(("submit_request", (request,), {}))
-        return {"accepted": True, "mission_id": "m-0001"}
+        self.calls.append(
+            ("submit_request", (request,), {})
+        )
+        return dict(self.submit_result)
 
     # Execution outcome
     def report_execution_outcome(self, outcome: dict) -> dict:
@@ -295,6 +312,220 @@ class TestRuntimePrivateAPISmoke(unittest.TestCase):
                 self.assertTrue(addr is not None)
         # Post-context, close again to verify idempotency
         api.close()
+
+
+@unittest.skipUnless(
+    RPA_AVAILABLE,
+    "runtime_private_api module not available",
+)
+class TestRuntimePrivateAPIRequestContract(
+    unittest.TestCase
+):
+    def setUp(self) -> None:
+        self.token = "runtime-http-contract-token"
+        self.runtime = FakeRuntimeService()
+
+        config = rpa.RuntimeAPIConfig(
+            host="127.0.0.1",
+            port=0,
+            auth_token_reference=(
+                "runtime-http-contract-token-ref"
+            ),
+        )
+
+        self.api = rpa.RuntimePrivateAPI(
+            config=config,
+            runtime=self.runtime,
+            token_resolver=lambda: self.token,
+        )
+
+        self.api.start()
+
+        address = self.api.address()
+
+        if (
+            not isinstance(address, tuple)
+            or len(address) < 2
+        ):
+            self.api.close()
+            self.fail("Runtime API did not bind")
+
+        self.host = str(address[0])
+        self.port = int(address[1])
+
+        self.addCleanup(self._cleanup_api)
+
+    def _cleanup_api(self) -> None:
+        try:
+            self.api.stop()
+        finally:
+            self.api.close()
+
+    def _post_request(
+        self,
+        body: dict,
+    ) -> tuple[int, dict]:
+        encoded = json.dumps(
+            body,
+        ).encode("utf-8")
+
+        conn = http.client.HTTPConnection(
+            self.host,
+            self.port,
+            timeout=2,
+        )
+
+        try:
+            conn.request(
+                "POST",
+                "/v1/requests",
+                body=encoded,
+                headers={
+                    "Authorization": (
+                        f"Bearer {self.token}"
+                    ),
+                    "Content-Type": (
+                        "application/json"
+                    ),
+                    "Content-Length": str(
+                        len(encoded)
+                    ),
+                },
+            )
+
+            response = conn.getresponse()
+            raw = response.read()
+
+            payload = json.loads(
+                raw.decode("utf-8")
+            )
+
+            return response.status, payload
+        finally:
+            conn.close()
+
+    def test_successful_request_returns_runtime_result(
+        self,
+    ) -> None:
+        status, payload = self._post_request(
+            {
+                "request_id": "req-http-success",
+                "project_id": "mitigate",
+                "conversation_id": (
+                    "conv-http-success"
+                ),
+                "user_message": (
+                    "Create a test mission."
+                ),
+                "upload_ids": [],
+                "requested_task_type": "testing",
+                "created_at": (
+                    "2026-08-10T12:00:00+00:00"
+                ),
+            }
+        )
+
+        self.assertEqual(
+            status,
+            202,
+        )
+
+        self.assertTrue(
+            payload["ok"]
+        )
+
+        self.assertEqual(
+            payload["status"],
+            202,
+        )
+
+        data = payload["data"]
+
+        self.assertTrue(
+            data["accepted"]
+        )
+
+        self.assertEqual(
+            data["mission_ids"],
+            ["m-0001"],
+        )
+
+        self.assertEqual(
+            data["plan_id"],
+            "plan-0001",
+        )
+
+        self.assertEqual(
+            payload["request_id"],
+            "req-0001",
+        )
+
+    def test_blocked_request_is_not_reported_accepted(
+        self,
+    ) -> None:
+        self.runtime.submit_result = {
+            "accepted": False,
+            "request_id": "req-http-blocked",
+            "project_id": "mitigate",
+            "conversation_id": (
+                "conv-http-blocked"
+            ),
+            "provider_id": "production",
+            "model_id": "production",
+            "task_type": "testing",
+            "plan_id": "",
+            "plan_summary": "",
+            "mission_ids": [],
+            "warning": None,
+            "blocked_reason": (
+                "dependency_failed"
+            ),
+            "created_at": (
+                "2026-08-10T12:00:00+00:00"
+            ),
+        }
+
+        status, payload = self._post_request(
+            {
+                "request_id": "req-http-blocked",
+                "project_id": "mitigate",
+                "conversation_id": (
+                    "conv-http-blocked"
+                ),
+                "user_message": (
+                    "Create a test mission."
+                ),
+                "upload_ids": [],
+                "requested_task_type": "testing",
+                "created_at": (
+                    "2026-08-10T12:00:00+00:00"
+                ),
+            }
+        )
+
+        self.assertEqual(
+            status,
+            503,
+        )
+
+        self.assertFalse(
+            payload["ok"]
+        )
+
+        self.assertEqual(
+            payload["status"],
+            503,
+        )
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "dependency_failed",
+        )
+
+        self.assertNotIn(
+            "data",
+            payload,
+        )
 
 
 @unittest.skipUnless(RPA_AVAILABLE, "runtime_private_api module not available")

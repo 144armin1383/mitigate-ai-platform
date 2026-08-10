@@ -34,6 +34,8 @@ class QueueEnqueueCoordinator:
         "conversation_id",
         "plan_id",
         "step_id",
+        "title",
+        "description",
         "task_type",
         "provider_id",
         "model_id",

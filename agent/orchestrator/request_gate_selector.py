@@ -682,11 +682,27 @@ class RequestGateSelector:
         return result
 
     def _sanitize_project_context(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
-        # Only include safe minimal fields necessary downstream
+        # Preserve only the explicit project fields required downstream.
         safe: Dict[str, Any] = {}
-        pid = ctx.get("project_id") if isinstance(ctx, dict) else None
-        if isinstance(pid, str):
-            safe["project_id"] = pid
+
+        if not isinstance(ctx, dict):
+            return safe
+
+        allowed_fields = (
+            "project_id",
+            "repository_root",
+            "default_branch",
+            "project_type",
+            "policy_profile",
+            "queue_reference",
+        )
+
+        for key in allowed_fields:
+            value = ctx.get(key)
+
+            if isinstance(value, str) and value.strip():
+                safe[key] = value.strip()
+
         return safe
 
     def _blocked_payload(

@@ -89,6 +89,10 @@ _FAILURE_STATUS_MAP: Dict[str, int] = {
     "cross_project_reference": 403,
     "no_model_available": 503,
     "planner_failed": 503,
+    "invalid_approved_request": 400,
+    "invalid_plan": 400,
+    "unsupported_queue_interface": 503,
+    "partial_enqueue": 503,
     "queue_resolution_failed": 503,
     "queue_failed": 503,
     "usage_recording_failed": 503,
@@ -487,23 +491,117 @@ class RuntimePrivateAPI:
                             self._emit_request_event("request_rejected", http_status=self._last_response_status(), failure_code="invalid_request")
                             return
                         try:
-                            result = _call_runtime(api._runtime, "submit_request", body)
-                            # Try to extract request_id if available
-                            request_id: Optional[str] = None
-                            if isinstance(result, dict):
-                                rid = result.get("request_id") or result.get("id")
-                                if isinstance(rid, str):
-                                    request_id = rid
+                            result = _call_runtime(
+                                api._runtime,
+                                "submit_request",
+                                body,
+                            )
+
+                            if not isinstance(result, dict):
+                                self._emit_request_event(
+                                    "request_rejected",
+                                    http_status=500,
+                                    failure_code="internal_error",
+                                )
+                                self._immediate_error(
+                                    500,
+                                    "internal_error",
+                                    _safe_error_message(
+                                        "internal_error"
+                                    ),
+                                )
+                                return
+
+                            accepted = bool(
+                                result.get("accepted")
+                            )
+
+                            if not accepted:
+                                blocked_reason = result.get(
+                                    "blocked_reason"
+                                )
+
+                                if not isinstance(
+                                    blocked_reason,
+                                    str,
+                                ) or not blocked_reason:
+                                    blocked_reason = (
+                                        "dependency_failed"
+                                    )
+
+                                http_code = (
+                                    _FAILURE_STATUS_MAP.get(
+                                        blocked_reason,
+                                        503,
+                                    )
+                                )
+
+                                self._emit_request_event(
+                                    "request_rejected",
+                                    http_status=http_code,
+                                    failure_code=(
+                                        blocked_reason
+                                    ),
+                                )
+
+                                self._immediate_error(
+                                    http_code,
+                                    blocked_reason,
+                                    _safe_error_message(
+                                        blocked_reason
+                                    ),
+                                )
+                                return
+
+                            safe_result = {
+                                key: result[key]
+                                for key in (
+                                    "accepted",
+                                    "request_id",
+                                    "project_id",
+                                    "conversation_id",
+                                    "provider_id",
+                                    "model_id",
+                                    "task_type",
+                                    "plan_id",
+                                    "plan_summary",
+                                    "mission_ids",
+                                    "warning",
+                                    "created_at",
+                                )
+                                if key in result
+                            }
+
                             payload = {
                                 "ok": True,
                                 "status": 202,
-                                "timestamp": _utc_now_iso(),
-                                "data": {"accepted": True},
+                                "timestamp": (
+                                    _utc_now_iso()
+                                ),
+                                "data": safe_result,
                             }
-                            if request_id:
-                                payload["request_id"] = request_id
-                            self._write_json_response(202, payload)
-                            self._emit_request_event("request_completed", http_status=202)
+
+                            request_id = safe_result.get(
+                                "request_id"
+                            )
+
+                            if isinstance(
+                                request_id,
+                                str,
+                            ):
+                                payload["request_id"] = (
+                                    request_id
+                                )
+
+                            self._write_json_response(
+                                202,
+                                payload,
+                            )
+
+                            self._emit_request_event(
+                                "request_completed",
+                                http_status=202,
+                            )
                         except Exception as ex:  # Map failures safely
                             http_code, code = _map_failure(ex)
                             self._emit_request_event("request_rejected", http_status=http_code, failure_code=code)
@@ -650,6 +748,10 @@ def _safe_error_message(code: str) -> str:
         "cross_project_reference": "Forbidden",
         "no_model_available": "Service unavailable",
         "planner_failed": "Service unavailable",
+        "invalid_approved_request": "Invalid request",
+        "invalid_plan": "Invalid request",
+        "unsupported_queue_interface": "Service unavailable",
+        "partial_enqueue": "Service unavailable",
         "queue_resolution_failed": "Service unavailable",
         "queue_failed": "Service unavailable",
         "usage_recording_failed": "Service unavailable",

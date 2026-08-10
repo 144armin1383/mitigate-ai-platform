@@ -518,14 +518,33 @@ class PlannerQueueFlowCoordinator:
                 mission_ids=[],
             )
 
-        ok = isinstance(enqueue_result, Mapping) and bool(enqueue_result.get("ok"))
-        if not ok:
-            # Map known failure codes; propagate queue_resolution_failed unchanged
-            code = (
-                enqueue_result.get("code")
-                if isinstance(enqueue_result, Mapping)
-                else None
-            )
+        if not isinstance(enqueue_result, Mapping):
+            queue_accepted = False
+            queue_failure_code = self.DEPENDENCY_FAILED
+        else:
+            # Production QueueEnqueueCoordinator contract uses
+            # accepted / blocked_reason. Preserve compatibility
+            # with the earlier ok / code contract used by tests
+            # and alternate adapters.
+            if "accepted" in enqueue_result:
+                queue_accepted = bool(
+                    enqueue_result.get("accepted")
+                )
+                queue_failure_code = (
+                    enqueue_result.get("blocked_reason")
+                )
+            else:
+                queue_accepted = bool(
+                    enqueue_result.get("ok")
+                )
+                queue_failure_code = (
+                    enqueue_result.get("code")
+                )
+
+        if not queue_accepted:
+            # Map known failure codes; propagate queue failures unchanged.
+            code = queue_failure_code
+
             if code == self.QUEUE_RESOLUTION_FAILED:
                 blocked = self.QUEUE_RESOLUTION_FAILED
             elif code == self.UNSUPPORTED_QUEUE_INTERFACE:

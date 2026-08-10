@@ -274,6 +274,65 @@ class PlanValidatorMissionBuilder:
 
         return dict(plan)
 
+    def validate_and_build(
+        self,
+        plan: Mapping[str, Any],
+        approved_request: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Coordinator-facing compatibility contract.
+
+        Accepts the richer approved request produced by the
+        PlannerQueueFlowCoordinator, extracts only the canonical
+        fields owned by this builder, validates the plan, and
+        returns the structured result expected by the coordinator.
+        """
+
+        if not isinstance(approved_request, Mapping):
+            return {
+                "ok": False,
+                "plan_id": "",
+                "plan_summary": "",
+                "missions": [],
+            }
+
+        builder_request = {
+            key: approved_request.get(key)
+            for key in self._APPROVED_REQUEST_FIELDS
+        }
+
+        try:
+            missions = self.build_missions(
+                plan,
+                builder_request,
+            )
+        except PlanValidationError:
+            return {
+                "ok": False,
+                "plan_id": "",
+                "plan_summary": "",
+                "missions": [],
+            }
+
+        plan_id = (
+            str(plan.get("plan_id") or "")
+            if isinstance(plan, Mapping)
+            else ""
+        )
+
+        plan_summary = (
+            str(plan.get("summary") or "")
+            if isinstance(plan, Mapping)
+            else ""
+        )
+
+        return {
+            "ok": True,
+            "plan_id": plan_id,
+            "plan_summary": plan_summary,
+            "missions": missions,
+        }
+
     def build_missions(self, plan: Mapping[str, Any], approved_request: Mapping[str, Any]) -> List[Dict[str, Any]]:
         # Validate inputs
         approved_request_v = self.validate_approved_request(approved_request)
