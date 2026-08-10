@@ -9,6 +9,7 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/srv/mitigate/mitigate-ai-platform
 EnvironmentFile=/etc/mitigate-ai/runtime.env
+Environment="GIT_SSH_COMMAND=ssh -F /etc/mitigate-ai/ssh/config"
 
 ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.background_worker --queue-path /srv/mitigate/data/runtime/missions.json --worker-id production-worker --poll-interval 5 --controller-mode mission-runner --heartbeat-path /srv/mitigate/data/runtime/worker.heartbeat
 

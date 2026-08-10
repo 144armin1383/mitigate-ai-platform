@@ -47,6 +47,13 @@ class RuntimeWorkerSystemdDeploymentTests(unittest.TestCase):
     def test_worker_restarts_on_failure(self):
         self.assertIn("Restart=on-failure", self.content)
 
+    def test_worker_uses_isolated_git_ssh_configuration(self):
+        self.assertIn(
+            'Environment="GIT_SSH_COMMAND=ssh '
+            '-F /etc/mitigate-ai/ssh/config"',
+            self.content,
+        )
+
     def test_worker_uses_sigterm(self):
         self.assertIn("KillSignal=SIGTERM", self.content)
 
