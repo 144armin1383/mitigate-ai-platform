@@ -21,11 +21,19 @@
       "git-main"
     ]
   },
-  "candidate_discovery_sources": [
-    "npm-ruflo-latest-dist-tag",
-    "github-stable-release",
-    "upstream-ruflo-package-json-diagnostic"
-  ],
+  "candidate_discovery": {
+    "authoritative_source": "npm-ruflo-latest-stable-dist-tag",
+    "secondary_verification_sources": [
+      "github-stable-release"
+    ],
+    "diagnostic_only_sources": [
+      "upstream-ruflo-package-json",
+      "upstream-git-main"
+    ],
+    "pre_release_allowed": false,
+    "source_disagreement_action": "do-not-promote",
+    "source_disagreement_requires_review": true
+  },
   "certified_version": null,
   "certification_required_checks": [
     "mitigate-ruflo-adapter-unit-tests",
@@ -40,7 +48,9 @@
     "auto_install_to_production": false,
     "auto_promote_to_certified": false,
     "upgrade_on_isolated_branch": true,
-    "rollback_to_last_certified": true
+    "rollback_to_last_certified": true,
+    "never_follow_upstream_main_in_production": true,
+    "never_install_unverified_latest_in_production": true
   },
   "independence_contract": {
     "mitigate_core_must_start_without_ruflo": true,
