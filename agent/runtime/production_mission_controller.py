@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -54,6 +55,119 @@ class ProductionMissionController:
             raise ValueError("invalid_mission_name")
 
         return name
+
+    def _mission_metadata(
+        self,
+        mission_name: str,
+    ) -> Dict[str, Any]:
+        path = (
+            self.agent_root
+            / "missions"
+            / f"{mission_name}.md"
+        )
+
+        metadata: Dict[str, Any] = {}
+
+        try:
+            content = path.read_text(
+                encoding="utf-8"
+            )
+        except OSError:
+            return metadata
+
+        task_match = re.search(
+            r"^Task Type:\s*(.+?)\s*$",
+            content,
+            re.MULTILINE,
+        )
+
+        if task_match:
+            task_type = task_match.group(1).strip()
+
+            if task_type:
+                metadata["task_type"] = task_type
+
+        context_match = re.search(
+            r"## Context\s*\n\s*```json\s*\n(.*?)\n```",
+            content,
+            re.DOTALL,
+        )
+
+        if context_match:
+            try:
+                context = json.loads(
+                    context_match.group(1)
+                )
+            except (TypeError, ValueError):
+                context = {}
+
+            if isinstance(context, dict):
+                request_id = str(
+                    context.get("request_id") or ""
+                ).strip()
+
+                if request_id:
+                    metadata["request_id"] = request_id
+
+        return metadata
+
+    @staticmethod
+    def _changed_files_from_review(
+        review: Dict[str, Any],
+    ) -> list[str]:
+        files = review.get("files", {})
+
+        if not isinstance(files, dict):
+            return []
+
+        changed: list[str] = []
+
+        for category in (
+            "added",
+            "modified",
+            "deleted",
+            "renamed",
+        ):
+            entries = files.get(category, [])
+
+            if not isinstance(entries, list):
+                continue
+
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+
+                candidate = str(
+                    entry.get("path") or ""
+                ).strip()
+
+                if candidate and candidate not in changed:
+                    changed.append(candidate)
+
+        return changed
+
+    def _git_commit(
+        self,
+        ref: str,
+    ) -> Optional[str]:
+        result = subprocess.run(
+            [
+                "git",
+                "rev-parse",
+                ref,
+            ],
+            cwd=self.repository_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            return None
+
+        commit = result.stdout.strip()
+
+        return commit or None
 
     def _restore_main(self) -> bool:
         result = subprocess.run(
@@ -251,6 +365,12 @@ class ProductionMissionController:
             "risk_level": risk_level,
             "merge_recommendation": recommendation,
             "merged_to_main": True,
+            "changed_files": (
+                self._changed_files_from_review(
+                    review
+                )
+            ),
+            "git_commit": self._git_commit(branch),
         }
 
     @staticmethod
@@ -337,6 +457,21 @@ class ProductionMissionController:
             merge_result = self._review_and_merge(
                 mission_name
             )
+
+            if merge_result.get("status") == "success":
+                metadata = self._mission_metadata(
+                    mission_name
+                )
+
+                for key in (
+                    "request_id",
+                    "task_type",
+                ):
+                    value = metadata.get(key)
+
+                    if value:
+                        merge_result[key] = value
+
             merge_result["returncode"] = 0
             return merge_result
 

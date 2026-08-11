@@ -94,6 +94,12 @@ class ProductionMissionControllerTests(unittest.TestCase):
                     stdout="",
                     stderr="",
                 ),
+                subprocess.CompletedProcess(
+                    ["git", "rev-parse", branch],
+                    0,
+                    stdout=f"{'b' * 40}\n",
+                    stderr="",
+                ),
             ]
 
             review_mock.return_value = {
@@ -117,7 +123,7 @@ class ProductionMissionControllerTests(unittest.TestCase):
                 result["merged_to_main"]
             )
             self.assertEqual(
-                6,
+                7,
                 run_mock.call_count,
             )
 
@@ -471,6 +477,12 @@ class ProductionMissionControllerAutoMergeTests(unittest.TestCase):
                     stdout="",
                     stderr="",
                 ),
+                subprocess.CompletedProcess(
+                    ["git", "rev-parse", branch],
+                    0,
+                    stdout=f"{'b' * 40}\n",
+                    stderr="",
+                ),
             ]
 
             review_mock.return_value = {
@@ -603,4 +615,190 @@ class ProductionMissionControllerAutoMergeTests(unittest.TestCase):
                     command[:2] == ["git", "push"]
                     for command in commands
                 )
+            )
+
+
+class ProductionMissionControllerReportingContractTests(unittest.TestCase):
+
+    def build_controller(
+        self,
+        root: Path,
+    ) -> ProductionMissionController:
+        (root / "agent").mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        return ProductionMissionController(
+            repository_root=root,
+            timeout_seconds=30,
+        )
+
+    @patch(
+        "agent.runtime.production_mission_controller.GitReviewEngine.review"
+    )
+    @patch(
+        "agent.runtime.production_mission_controller.subprocess.run"
+    )
+    def test_success_returns_execution_report_metadata(
+        self,
+        run_mock,
+        review_mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            controller = self.build_controller(root)
+
+            missions_root = root / "agent" / "missions"
+            missions_root.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            mission_name = "report_contract"
+
+            mission_definition = (
+                "# Reporting Contract\n\n"
+                "Mission ID: report_contract\n"
+                "Task Type: documentation\n\n"
+                "## Objective\n\n"
+                "Test reporting metadata.\n\n"
+                "## Deliverables\n\n"
+                "- docs/runtime/REPORT_CONTRACT.md\n\n"
+                "## Context\n\n"
+                "```json\n"
+                "{\n"
+                '  "project_id": "mitigate-ai-platform",\n'
+                '  "request_id": "req-report-contract-001"\n'
+                "}\n"
+                "```\n"
+            )
+
+            (
+                missions_root
+                / f"{mission_name}.md"
+            ).write_text(
+                mission_definition,
+                encoding="utf-8",
+            )
+
+            branch = (
+                "agent/mission-report-contract-"
+                "20260811-090500"
+            )
+
+            original_head = "a" * 40
+            mission_commit = "b" * 40
+
+            run_mock.side_effect = [
+                subprocess.CompletedProcess(
+                    ["python"],
+                    0,
+                    stdout="MISSION COMPLETED",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    ["git", "switch", "main"],
+                    0,
+                    stdout="",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    ["git", "for-each-ref"],
+                    0,
+                    stdout=f"{branch}\n",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    ["git", "rev-parse", "HEAD"],
+                    0,
+                    stdout=f"{original_head}\n",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    ["git", "merge"],
+                    0,
+                    stdout="",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    ["git", "push"],
+                    0,
+                    stdout="",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    ["git", "rev-parse", branch],
+                    0,
+                    stdout=f"{mission_commit}\n",
+                    stderr="",
+                ),
+            ]
+
+            review_mock.return_value = {
+                "validation": {
+                    "ok": True,
+                    "errors": [],
+                },
+                "files": {
+                    "added": [
+                        {
+                            "path": (
+                                "docs/runtime/"
+                                "REPORT_CONTRACT.md"
+                            ),
+                            "status": "A",
+                            "insertions": 8,
+                            "deletions": 0,
+                        },
+                    ],
+                    "modified": [],
+                    "deleted": [],
+                    "renamed": [],
+                },
+                "risk_level": "low",
+                "merge_recommendation": "approve",
+            }
+
+            result = controller.execute(
+                {"id": mission_name}
+            )
+
+            self.assertEqual(
+                "success",
+                result["status"],
+            )
+            self.assertEqual(
+                "req-report-contract-001",
+                result["request_id"],
+            )
+            self.assertEqual(
+                "documentation",
+                result["task_type"],
+            )
+            self.assertEqual(
+                [
+                    "docs/runtime/"
+                    "REPORT_CONTRACT.md"
+                ],
+                result["changed_files"],
+            )
+            self.assertEqual(
+                branch,
+                result["branch"],
+            )
+            self.assertEqual(
+                mission_commit,
+                result["git_commit"],
+            )
+            self.assertEqual(
+                "low",
+                result["risk_level"],
+            )
+            self.assertEqual(
+                "approve",
+                result["merge_recommendation"],
+            )
+            self.assertTrue(
+                result["merged_to_main"]
             )
