@@ -427,6 +427,22 @@ class BackgroundWorker:
             default=None,
             help="Project identifier used for production execution reporting",
         )
+        parser.add_argument(
+            "--technology-registry-path",
+            dest="technology_registry_path",
+            default=None,
+            help=(
+                "Optional persistent MITIGATE technology registry path"
+            ),
+        )
+        parser.add_argument(
+            "--queue-reference",
+            dest="queue_reference",
+            default="missions",
+            help=(
+                "Logical queue reference used by native assimilation missions"
+            ),
+        )
         return parser
 
 
@@ -518,6 +534,49 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
             project_id=str(args.project_id),
         )
 
+    lifecycle_hook = None
+
+    if (
+        reporter is not None
+        and args.project_id
+        and args.technology_registry_path
+    ):
+        try:
+            from agent.runtime.production_assimilation_composition import (
+                try_build_production_assimilation_hook,
+            )
+            from agent.runtime.production_queue_coordinator_adapter import (
+                ProductionQueueCoordinatorAdapter,
+            )
+
+            queue_coordinator = (
+                ProductionQueueCoordinatorAdapter(
+                    queue=queue,
+                    project_id=str(
+                        args.project_id
+                    ),
+                    queue_reference=str(
+                        args.queue_reference
+                    ),
+                )
+            )
+
+            lifecycle_hook = (
+                try_build_production_assimilation_hook(
+                    registry_path=str(
+                        args.technology_registry_path
+                    ),
+                    queue_coordinator=queue_coordinator,
+                    queue_reference=str(
+                        args.queue_reference
+                    ),
+                    report_lookup=reporter,
+                )
+            )
+
+        except Exception:
+            lifecycle_hook = None
+
     worker = BackgroundWorker(
         queue=queue,
         controller=controller,
@@ -527,6 +586,7 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
         max_idle_cycles=args.max_idle_cycles,
         heartbeat_path=args.heartbeat_path,
         execution_reporter=reporter,
+        lifecycle_hook=lifecycle_hook,
     )
 
     worker.run()
