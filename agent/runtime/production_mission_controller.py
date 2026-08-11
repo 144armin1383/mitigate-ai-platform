@@ -111,6 +111,140 @@ class ProductionMissionController:
 
         return metadata
 
+    def _technology_evaluation_medium_risk_allowed(
+        self,
+        *,
+        mission_name: str,
+        review: Dict[str, Any],
+    ) -> bool:
+        """
+        Allow a narrowly-scoped technology evaluation artifact to pass
+        medium-risk review when the risk is caused only by change size.
+
+        This does not weaken the general review policy. The exception is
+        fail-closed and applies only when:
+        - the mission declares task_type=technology_evaluation;
+        - the mission declares exactly one repository-relative deliverable;
+        - every non-internal changed file is that declared deliverable;
+        - no high-risk category findings are present;
+        - review validation succeeded;
+        - the review result is exactly medium/manual_review.
+        """
+        if review.get("risk_level") != "medium":
+            return False
+
+        if review.get("merge_recommendation") != "manual_review":
+            return False
+
+        validation = review.get("validation", {})
+
+        if not isinstance(validation, dict):
+            return False
+
+        if not validation.get("ok", False):
+            return False
+
+        metadata = self._mission_metadata(
+            mission_name
+        )
+
+        if metadata.get("task_type") != "technology_evaluation":
+            return False
+
+        mission_path = (
+            self.agent_root
+            / "missions"
+            / f"{mission_name}.md"
+        )
+
+        try:
+            content = mission_path.read_text(
+                encoding="utf-8"
+            )
+        except OSError:
+            return False
+
+        context_match = re.search(
+            r"## Context\s*\n\s*```json\s*\n(.*?)\n```",
+            content,
+            re.DOTALL,
+        )
+
+        if not context_match:
+            return False
+
+        try:
+            context = json.loads(
+                context_match.group(1)
+            )
+        except (TypeError, ValueError):
+            return False
+
+        if not isinstance(context, dict):
+            return False
+
+        deliverables = context.get(
+            "deliverables"
+        )
+
+        if (
+            not isinstance(deliverables, list)
+            or len(deliverables) != 1
+        ):
+            return False
+
+        deliverable = str(
+            deliverables[0] or ""
+        ).strip()
+
+        if not deliverable:
+            return False
+
+        deliverable_path = Path(
+            deliverable
+        )
+
+        if (
+            deliverable_path.is_absolute()
+            or ".." in deliverable_path.parts
+        ):
+            return False
+
+        changed_files, _internal_files = (
+            self._classified_files_from_review(
+                review
+            )
+        )
+
+        if changed_files != [deliverable]:
+            return False
+
+        categories = review.get(
+            "categories",
+            {}
+        )
+
+        if not isinstance(categories, dict):
+            return False
+
+        findings = categories.get(
+            "findings",
+            []
+        )
+
+        high_risk_files = categories.get(
+            "high_risk_files",
+            []
+        )
+
+        if findings:
+            return False
+
+        if high_risk_files:
+            return False
+
+        return True
+
     @staticmethod
     def _classified_files_from_review(
         review: Dict[str, Any],
@@ -259,9 +393,21 @@ class ProductionMissionController:
             "merge_recommendation"
         )
 
-        if (
-            risk_level != "low"
-            or recommendation != "approve"
+        standard_auto_merge = (
+            risk_level == "low"
+            and recommendation == "approve"
+        )
+
+        technology_evaluation_auto_merge = (
+            self._technology_evaluation_medium_risk_allowed(
+                mission_name=mission_name,
+                review=review,
+            )
+        )
+
+        if not (
+            standard_auto_merge
+            or technology_evaluation_auto_merge
         ):
             return {
                 "status": "blocked",

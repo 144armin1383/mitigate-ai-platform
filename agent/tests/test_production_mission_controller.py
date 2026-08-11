@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -818,4 +819,280 @@ class ProductionMissionControllerReportingContractTests(unittest.TestCase):
             )
             self.assertTrue(
                 result["merged_to_main"]
+            )
+
+
+class ProductionMissionControllerTechnologyEvaluationAutoMergeContractTests(
+    unittest.TestCase
+):
+
+    def build_controller(
+        self,
+        root: Path,
+    ) -> ProductionMissionController:
+        (root / "agent" / "missions").mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        return ProductionMissionController(
+            repository_root=root,
+            timeout_seconds=30,
+        )
+
+    def write_mission(
+        self,
+        root: Path,
+        mission_name: str,
+        *,
+        task_type: str = "technology_evaluation",
+        deliverable: str = (
+            "docs/technology/evaluations/"
+            "ruflo/3.37.0.json"
+        ),
+    ) -> None:
+        content = (
+            "# Evaluate technology ruflo\n\n"
+            f"Mission ID: {mission_name}\n"
+            f"Task Type: {task_type}\n\n"
+            "## Context\n\n"
+            "```json\n"
+            + json.dumps(
+                {
+                    "deliverables": [
+                        deliverable
+                    ]
+                }
+            )
+            + "\n```\n"
+        )
+
+        (
+            root
+            / "agent"
+            / "missions"
+            / f"{mission_name}.md"
+        ).write_text(
+            content,
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def medium_review(
+        deliverable: str = (
+            "docs/technology/evaluations/"
+            "ruflo/3.37.0.json"
+        ),
+    ):
+        return {
+            "validation": {
+                "ok": True,
+                "errors": [],
+            },
+            "risk_level": "medium",
+            "merge_recommendation": "manual_review",
+            "files": {
+                "added": [
+                    {
+                        "path": deliverable,
+                    }
+                ],
+                "modified": [],
+                "deleted": [],
+                "renamed": [],
+            },
+            "categories": {
+                "findings": [],
+                "high_risk_files": [],
+            },
+        }
+
+    def test_medium_technology_evaluation_artifact_is_allowed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            controller = self.build_controller(
+                root
+            )
+
+            mission_name = (
+                "technology-evaluation-test"
+            )
+
+            self.write_mission(
+                root,
+                mission_name,
+            )
+
+            allowed = (
+                controller
+                ._technology_evaluation_medium_risk_allowed(
+                    mission_name=mission_name,
+                    review=self.medium_review(),
+                )
+            )
+
+            self.assertTrue(
+                allowed
+            )
+
+    def test_general_medium_mission_remains_blocked(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            controller = self.build_controller(
+                root
+            )
+
+            mission_name = "general-test"
+
+            self.write_mission(
+                root,
+                mission_name,
+                task_type="general",
+            )
+
+            allowed = (
+                controller
+                ._technology_evaluation_medium_risk_allowed(
+                    mission_name=mission_name,
+                    review=self.medium_review(),
+                )
+            )
+
+            self.assertFalse(
+                allowed
+            )
+
+    def test_unexpected_changed_file_is_blocked(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            controller = self.build_controller(
+                root
+            )
+
+            mission_name = (
+                "technology-evaluation-test"
+            )
+
+            self.write_mission(
+                root,
+                mission_name,
+            )
+
+            review = self.medium_review()
+
+            review["files"]["modified"].append(
+                {
+                    "path":
+                    "agent/runtime/background_worker.py"
+                }
+            )
+
+            allowed = (
+                controller
+                ._technology_evaluation_medium_risk_allowed(
+                    mission_name=mission_name,
+                    review=review,
+                )
+            )
+
+            self.assertFalse(
+                allowed
+            )
+
+    def test_high_risk_finding_is_blocked(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            controller = self.build_controller(
+                root
+            )
+
+            mission_name = (
+                "technology-evaluation-test"
+            )
+
+            self.write_mission(
+                root,
+                mission_name,
+            )
+
+            review = self.medium_review()
+
+            review["categories"]["findings"] = [
+                "Dependency manifest changed"
+            ]
+
+            allowed = (
+                controller
+                ._technology_evaluation_medium_risk_allowed(
+                    mission_name=mission_name,
+                    review=review,
+                )
+            )
+
+            self.assertFalse(
+                allowed
+            )
+
+    def test_multiple_deliverables_are_blocked(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            controller = self.build_controller(
+                root
+            )
+
+            mission_name = (
+                "technology-evaluation-test"
+            )
+
+            mission_path = (
+                root
+                / "agent"
+                / "missions"
+                / f"{mission_name}.md"
+            )
+
+            mission_path.write_text(
+                (
+                    "# Evaluation\n\n"
+                    f"Mission ID: {mission_name}\n"
+                    "Task Type: technology_evaluation\n\n"
+                    "## Context\n\n"
+                    "```json\n"
+                    + json.dumps(
+                        {
+                            "deliverables": [
+                                (
+                                    "docs/technology/"
+                                    "evaluations/ruflo/"
+                                    "3.37.0.json"
+                                ),
+                                "README.md",
+                            ]
+                        }
+                    )
+                    + "\n```\n"
+                ),
+                encoding="utf-8",
+            )
+
+            allowed = (
+                controller
+                ._technology_evaluation_medium_risk_allowed(
+                    mission_name=mission_name,
+                    review=self.medium_review(),
+                )
+            )
+
+            self.assertFalse(
+                allowed
             )
