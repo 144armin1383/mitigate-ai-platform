@@ -656,6 +656,119 @@ class TestRuntimePrivateAPIStatusEndpoints(
         finally:
             conn.close()
 
+    def test_list_executions_success(self):
+        self.runtime.list_executions = (
+            lambda limit=20: {
+                "items": [
+                    {
+                        "execution_id":
+                            "exec-status-1",
+                    }
+                ],
+                "limit": limit,
+                "count": 1,
+            }
+        )
+
+        status, payload = self._get(
+            "/v1/executions?limit=10"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["data"]["limit"],
+            10,
+        )
+        self.assertEqual(
+            payload["data"]["count"],
+            1,
+        )
+
+    def test_list_requests_success(self):
+        self.runtime.list_requests = (
+            lambda limit=20: {
+                "items": [
+                    {
+                        "request_id":
+                            "req-status-1",
+                        "status":
+                            "completed",
+                    }
+                ],
+                "limit": limit,
+                "count": 1,
+            }
+        )
+
+        status, payload = self._get(
+            "/v1/requests?limit=10"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["data"]["limit"],
+            10,
+        )
+        self.assertEqual(
+            payload["data"]["count"],
+            1,
+        )
+
+    def test_list_requests_rejects_zero_limit(self):
+        status, payload = self._get(
+            "/v1/requests?limit=0"
+        )
+
+        self.assertEqual(
+            status,
+            400,
+        )
+
+        self.assertFalse(
+            payload["ok"]
+        )
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "invalid_limit",
+        )
+
+    def test_list_executions_rejects_limit_over_max(self):
+        status, payload = self._get(
+            "/v1/executions?limit=101"
+        )
+
+        self.assertEqual(
+            status,
+            400,
+        )
+
+        self.assertFalse(
+            payload["ok"]
+        )
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "invalid_limit",
+        )
+
+    def test_list_requests_rejects_non_numeric_limit(self):
+        status, payload = self._get(
+            "/v1/requests?limit=abc"
+        )
+
+        self.assertEqual(
+            status,
+            400,
+        )
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "invalid_limit",
+        )
+
     def test_get_mission_success(self):
         status, payload = self._get(
             "/v1/missions/m-status-1"

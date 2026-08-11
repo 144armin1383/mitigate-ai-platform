@@ -82,6 +82,7 @@ _FAILURE_STATUS_MAP: Dict[str, int] = {
     "invalid_runtime_transition": 409,
     "duplicate_execution": 409,
     "invalid_status_transition": 409,
+    "invalid_limit": 400,
     "mission_not_found": 404,
     "execution_not_found": 404,
     "request_not_found": 404,
@@ -471,7 +472,95 @@ class RuntimePrivateAPI:
                         if part
                     ]
 
+                    query = urlsplit(
+                        self.path
+                    ).query
+
+                    def _list_limit() -> int:
+                        from urllib.parse import parse_qs
+
+                        values = parse_qs(
+                            query,
+                            keep_blank_values=True,
+                        ).get("limit")
+
+                        if not values:
+                            return 20
+
+                        if (
+                            len(values) != 1
+                            or not values[0].isdigit()
+                        ):
+                            raise ValueError(
+                                "invalid_limit"
+                            )
+
+                        limit = int(values[0])
+
+                        if limit < 1 or limit > 100:
+                            raise ValueError(
+                                "invalid_limit"
+                            )
+
+                        return limit
+
                     try:
+                        if (
+                            len(route_parts) == 2
+                            and route_parts[0] == "v1"
+                            and route_parts[1] == "executions"
+                        ):
+                            self._emit_request_event(
+                                "request_received"
+                            )
+                            data = _call_runtime(
+                                api._runtime,
+                                "list_executions",
+                                _list_limit(),
+                            )
+                            self._write_json_response(
+                                200,
+                                {
+                                    "ok": True,
+                                    "status": 200,
+                                    "timestamp": _utc_now_iso(),
+                                    "data": data,
+                                },
+                            )
+                            self._emit_request_event(
+                                "request_completed",
+                                http_status=200,
+                            )
+                            return
+
+                        if (
+                            len(route_parts) == 2
+                            and route_parts[0] == "v1"
+                            and route_parts[1] == "requests"
+                        ):
+                            self._emit_request_event(
+                                "request_received"
+                            )
+                            data = _call_runtime(
+                                api._runtime,
+                                "list_requests",
+                                _list_limit(),
+                            )
+                            self._write_json_response(
+                                200,
+                                {
+                                    "ok": True,
+                                    "status": 200,
+                                    "timestamp": _utc_now_iso(),
+                                    "data": data,
+                                },
+                            )
+                            self._emit_request_event(
+                                "request_completed",
+                                http_status=200,
+                            )
+                            return
+
                         if (
                             len(route_parts) == 3
                             and route_parts[0] == "v1"
@@ -845,6 +934,7 @@ def _safe_error_message(code: str) -> str:
         "missing_authentication": "Authentication required",
         "invalid_authentication": "Invalid authentication",
         "invalid_request": "Invalid request",
+        "invalid_limit": "Invalid limit",
         "invalid_execution_outcome": "Invalid execution outcome",
         "runtime_not_running": "Runtime not running",
         "invalid_runtime_transition": "Invalid runtime transition",
@@ -885,7 +975,7 @@ def _map_failure(ex: Exception) -> Tuple[int, str]:
         code = getattr(ex, "error_code", None)
     if not isinstance(code, str) or not code:
         if (
-            isinstance(ex, KeyError)
+            isinstance(ex, (KeyError, ValueError))
             and len(ex.args) == 1
             and isinstance(ex.args[0], str)
             and ex.args[0] in _FAILURE_STATUS_MAP

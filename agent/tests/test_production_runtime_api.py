@@ -519,6 +519,59 @@ class ProductionRuntimeStatusContractTests(
             result["missions"][0]["execution"]
         )
 
+    def test_list_executions_returns_items(self):
+        runtime = self.build_runtime()
+
+        runtime._execution_reporter.list_reports = (
+            lambda limit: [
+                dict(
+                    runtime._execution_reporter.report
+                )
+            ]
+        )
+
+        result = runtime.list_executions(20)
+
+        self.assertEqual(result["limit"], 20)
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            result["items"][0]["execution_id"],
+            "exec-status-1",
+        )
+
+    def test_list_requests_returns_correlated_status(self):
+        runtime = self.build_runtime()
+
+        runtime._execution_reporter.list_reports = (
+            lambda limit: [
+                dict(
+                    runtime._execution_reporter.report
+                )
+            ]
+        )
+
+        result = runtime.list_requests(20)
+
+        self.assertEqual(result["limit"], 20)
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            result["items"][0]["request_id"],
+            "req-status-1",
+        )
+        self.assertEqual(
+            result["items"][0]["status"],
+            "completed",
+        )
+
+    def test_list_requests_rejects_invalid_limit(self):
+        runtime = self.build_runtime()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "invalid_limit",
+        ):
+            runtime.list_requests(0)
+
     def test_request_status_not_found(self):
         runtime = self.build_runtime()
 

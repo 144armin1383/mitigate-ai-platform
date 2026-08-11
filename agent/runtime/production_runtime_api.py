@@ -232,6 +232,97 @@ class ProductionRuntimeFacade:
             "missions": missions,
         }
 
+    def list_executions(
+        self,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if self._execution_reporter is None:
+            raise RuntimeError(
+                "report_persistence_failed"
+            )
+
+        reports = (
+            self._execution_reporter
+            .list_reports(limit)
+        )
+
+        return {
+            "items": reports,
+            "limit": limit,
+            "count": len(reports),
+        }
+
+    def list_requests(
+        self,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if self._execution_reporter is None:
+            raise RuntimeError(
+                "report_persistence_failed"
+            )
+
+        if self._request_queue_adapter is None:
+            raise RuntimeError(
+                "queue_resolution_failed"
+            )
+
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or limit < 1
+            or limit > 100
+        ):
+            raise ValueError("invalid_limit")
+
+        # Pull enough execution reports to deduplicate
+        # recent completed requests without introducing
+        # another persistence layer.
+        reports = (
+            self._execution_reporter
+            .list_reports(100)
+        )
+
+        request_ids: list[str] = []
+        seen: set[str] = set()
+
+        for report in reports:
+            request_id = str(
+                report.get(
+                    "request_id",
+                    ""
+                )
+            ).strip()
+
+            if (
+                not request_id
+                or request_id in seen
+            ):
+                continue
+
+            seen.add(request_id)
+            request_ids.append(request_id)
+
+            if len(request_ids) >= limit:
+                break
+
+        items = []
+
+        for request_id in request_ids:
+            try:
+                items.append(
+                    self.get_request_status(
+                        request_id
+                    )
+                )
+            except KeyError:
+                continue
+
+        return {
+            "items": items,
+            "limit": limit,
+            "count": len(items),
+        }
+
     def runtime_status(
         self,
     ) -> dict[str, Any]:

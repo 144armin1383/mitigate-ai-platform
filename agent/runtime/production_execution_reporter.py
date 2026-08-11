@@ -419,6 +419,72 @@ class ProductionExecutionReporter:
 
         return reports
 
+    def list_reports(
+        self,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or limit < 1
+            or limit > 100
+        ):
+            raise ValueError("invalid_limit")
+
+        reports_dir = (
+            self.storage_dir
+            / "reports"
+            / "by-execution"
+        )
+
+        if not reports_dir.exists():
+            return []
+
+        reports: list[dict[str, Any]] = []
+
+        for path in reports_dir.glob("*.json"):
+            try:
+                import json
+
+                report = json.loads(
+                    path.read_text(
+                        encoding="utf-8"
+                    )
+                )
+            except Exception:
+                continue
+
+            if not isinstance(report, dict):
+                continue
+
+            if (
+                report.get("project_id")
+                != self.project_id
+            ):
+                continue
+
+            reports.append(report)
+
+        reports.sort(
+            key=lambda item: (
+                str(
+                    item.get(
+                        "completed_at",
+                        "",
+                    )
+                ),
+                str(
+                    item.get(
+                        "execution_id",
+                        "",
+                    )
+                ),
+            ),
+            reverse=True,
+        )
+
+        return reports[:limit]
+
     def status(self) -> dict[str, Any]:
         return self._writer.status(
             project_id=self.project_id
