@@ -323,6 +323,9 @@ class FakeRequestQueueAdapter:
 
         return []
 
+    def list_request_ids(self):
+        return ["req-status-1"]
+
 
 class ProductionRuntimeStatusContractTests(
     unittest.TestCase
@@ -561,6 +564,77 @@ class ProductionRuntimeStatusContractTests(
         self.assertEqual(
             result["items"][0]["status"],
             "completed",
+        )
+
+    def test_list_requests_includes_legacy_report_without_correlation(
+        self,
+    ):
+        runtime = self.build_runtime()
+
+        legacy_report = dict(
+            runtime._execution_reporter.report
+        )
+
+        legacy_report.update(
+            {
+                "request_id":
+                    "req-legacy-1",
+                "mission_id":
+                    "m-legacy-1",
+                "execution_id":
+                    "exec-legacy-1",
+                "completed_at":
+                    "2026-08-10T00:00:00Z",
+                "status":
+                    "completed",
+            }
+        )
+
+        runtime._execution_reporter.list_reports = (
+            lambda limit: [
+                dict(
+                    runtime._execution_reporter.report
+                ),
+                legacy_report,
+            ]
+        )
+
+        result = runtime.list_requests(
+            20
+        )
+
+        request_ids = [
+            item["request_id"]
+            for item in result["items"]
+        ]
+
+        self.assertIn(
+            "req-status-1",
+            request_ids,
+        )
+
+        self.assertIn(
+            "req-legacy-1",
+            request_ids,
+        )
+
+        legacy = next(
+            item
+            for item in result["items"]
+            if item["request_id"]
+            == "req-legacy-1"
+        )
+
+        self.assertEqual(
+            legacy["status"],
+            "completed",
+        )
+
+        self.assertEqual(
+            legacy["missions"][0]
+            ["execution"]
+            ["execution_id"],
+            "exec-legacy-1",
         )
 
     def test_list_requests_rejects_invalid_limit(self):

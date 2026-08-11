@@ -363,6 +363,84 @@ class ProductionRequestQueueAdapter:
 
         return mission_ids
 
+    def list_request_ids(
+        self,
+    ) -> list[str]:
+        correlated: list[
+            tuple[int, str]
+        ] = []
+
+        for mission in self.queue.list():
+            mission_id = str(
+                mission.get("id") or ""
+            ).strip()
+
+            if not mission_id:
+                continue
+
+            path = self._definition_path(
+                mission_id
+            )
+
+            if not path.is_file():
+                continue
+
+            try:
+                text = path.read_text(
+                    encoding="utf-8"
+                )
+            except OSError:
+                continue
+
+            request_id = ""
+
+            for line in text.splitlines():
+                if line.startswith(
+                    "Request ID: "
+                ):
+                    request_id = line[
+                        len("Request ID: "):
+                    ].strip()
+                    break
+
+            if not request_id:
+                continue
+
+            created_seq = mission.get(
+                "created_seq",
+                0,
+            )
+
+            if not isinstance(
+                created_seq,
+                int,
+            ):
+                created_seq = 0
+
+            correlated.append(
+                (
+                    created_seq,
+                    request_id,
+                )
+            )
+
+        correlated.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        result: list[str] = []
+        seen: set[str] = set()
+
+        for _, request_id in correlated:
+            if request_id in seen:
+                continue
+
+            seen.add(request_id)
+            result.append(request_id)
+
+        return result
+
     # Explicit aliases supported by QueueEnqueueCoordinator.
     enqueue_many = enqueue_batch
     enqueue_missions = enqueue_batch

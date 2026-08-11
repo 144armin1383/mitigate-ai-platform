@@ -266,6 +266,11 @@ class ProductionRuntimeFacade:
                 "queue_resolution_failed"
             )
 
+        if self._queue is None:
+            raise RuntimeError(
+                "queue_resolution_failed"
+            )
+
         if (
             not isinstance(limit, int)
             or isinstance(limit, bool)
@@ -274,23 +279,62 @@ class ProductionRuntimeFacade:
         ):
             raise ValueError("invalid_limit")
 
-        # Pull enough execution reports to deduplicate
-        # recent completed requests without introducing
-        # another persistence layer.
         reports = (
             self._execution_reporter
             .list_reports(100)
         )
 
-        request_ids: list[str] = []
-        seen: set[str] = set()
+        reports_by_request: dict[
+            str,
+            list[dict[str, Any]],
+        ] = {}
+
+        report_request_ids: list[str] = []
 
         for report in reports:
             request_id = str(
                 report.get(
                     "request_id",
-                    ""
+                    "",
                 )
+            ).strip()
+
+            if not request_id:
+                continue
+
+            reports_by_request.setdefault(
+                request_id,
+                [],
+            ).append(report)
+
+            if request_id not in report_request_ids:
+                report_request_ids.append(
+                    request_id
+                )
+
+        live_request_ids: list[str] = []
+
+        if hasattr(
+            self._request_queue_adapter,
+            "list_request_ids",
+        ):
+            live_request_ids = list(
+                self._request_queue_adapter
+                .list_request_ids()
+            )
+
+        request_ids: list[str] = []
+        seen: set[str] = set()
+
+        # Live / queue-visible requests come first.
+        # Historical-only requests then follow in
+        # execution completion order.
+        for request_id in (
+            live_request_ids
+            + report_request_ids
+        ):
+            request_id = str(
+                request_id
             ).strip()
 
             if (
@@ -300,22 +344,132 @@ class ProductionRuntimeFacade:
                 continue
 
             seen.add(request_id)
-            request_ids.append(request_id)
+            request_ids.append(
+                request_id
+            )
 
-            if len(request_ids) >= limit:
-                break
-
-        items = []
+        items: list[dict[str, Any]] = []
 
         for request_id in request_ids:
             try:
-                items.append(
-                    self.get_request_status(
-                        request_id
-                    )
+                item = self.get_request_status(
+                    request_id
                 )
             except KeyError:
-                continue
+                # Legacy request: execution report exists,
+                # but its mission definition predates the
+                # explicit Request ID correlation contract.
+                request_reports = (
+                    reports_by_request.get(
+                        request_id,
+                        [],
+                    )
+                )
+
+                if not request_reports:
+                    continue
+
+                missions: list[
+                    dict[str, Any]
+                ] = []
+
+                states: list[str] = []
+
+                for report in request_reports:
+                    mission_id = str(
+                        report.get(
+                            "mission_id",
+                            "",
+                        )
+                    ).strip()
+
+                    mission = None
+
+                    if mission_id:
+                        try:
+                            mission = (
+                                self._queue.get(
+                                    mission_id
+                                )
+                            )
+                        except KeyError:
+                            mission = None
+
+                    report_status = str(
+                        report.get(
+                            "status",
+                            "",
+                        )
+                    ).lower()
+
+                    if mission is None:
+                        mission = {
+                            "id": mission_id,
+                            "state": (
+                                report_status
+                                or "completed"
+                            ),
+                        }
+
+                    state = str(
+                        mission.get(
+                            "state",
+                            report_status,
+                        )
+                    ).lower()
+
+                    states.append(state)
+
+                    missions.append(
+                        {
+                            "mission": mission,
+                            "execution": report,
+                        }
+                    )
+
+                if states and all(
+                    state == "completed"
+                    for state in states
+                ):
+                    status = "completed"
+                elif any(
+                    state == "running"
+                    for state in states
+                ):
+                    status = "running"
+                elif any(
+                    state == "retrying"
+                    for state in states
+                ):
+                    status = "retrying"
+                elif any(
+                    state == "failed"
+                    for state in states
+                ):
+                    status = "failed"
+                elif any(
+                    state == "blocked"
+                    for state in states
+                ):
+                    status = "blocked"
+                elif any(
+                    state == "cancelled"
+                    for state in states
+                ):
+                    status = "cancelled"
+                else:
+                    status = "pending"
+
+                item = {
+                    "request_id": request_id,
+                    "status": status,
+                    "missions": missions,
+                }
+
+            items.append(item)
+
+            if len(items) >= limit:
+                break
 
         return {
             "items": items,
