@@ -114,7 +114,12 @@ class TechnologyEvaluationMissionBridge:
                 "modify_mission_architecture",
                 "bypass_validation",
             ],
-            "deliverables": [],
+            "deliverables": [
+                self._evaluation_artifact_path(
+                    candidate.technology_id,
+                    candidate.observed_version,
+                )
+            ],
         }
 
         return {
@@ -167,6 +172,43 @@ class TechnologyEvaluationMissionBridge:
             request.project_id,
             self._queue_reference,
             [mission],
+        )
+
+    @staticmethod
+    def _evaluation_artifact_path(
+        technology_id: str,
+        observed_version: str | None,
+    ) -> str:
+        technology = "".join(
+            character
+            if character.isalnum() or character in ("-", "_")
+            else "-"
+            for character in technology_id.strip().lower()
+        ).strip("-")
+
+        version_source = (
+            observed_version
+            or "unknown"
+        ).strip().lower()
+
+        version = "".join(
+            character
+            if character.isalnum() or character in ("-", "_", ".")
+            else "-"
+            for character in version_source
+        ).strip("-")
+
+        if not technology:
+            raise ValueError(
+                "technology_id cannot produce artifact path"
+            )
+
+        if not version:
+            version = "unknown"
+
+        return (
+            "docs/technology/evaluations/"
+            f"{technology}/{version}.json"
         )
 
     @staticmethod

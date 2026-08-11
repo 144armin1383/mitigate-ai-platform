@@ -429,3 +429,90 @@ class TechnologyEvaluationMissionBridgeTests(
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TechnologyEvaluationArtifactContractTests(
+    unittest.TestCase
+):
+    def _bridge(self):
+        return TechnologyEvaluationMissionBridge(
+            queue_coordinator=FakeCoordinator(),
+            queue_reference="missions",
+        )
+
+    def _candidate(
+        self,
+        *,
+        technology_id="ruflo",
+        observed_version="3.37.0",
+    ):
+        return TechnologyEvaluationCandidate(
+            technology_id=technology_id,
+            observed_version=observed_version,
+            score=TechnologyScore(
+                relevance=70,
+                capability_novelty=100,
+                architectural_compatibility=70,
+                independence_potential=80,
+                operational_value=60,
+                security_risk_penalty=0,
+                external_dependency_penalty=0,
+                total=76,
+                evaluation_candidate=True,
+            ),
+        )
+
+    def test_evaluation_has_machine_readable_deliverable(
+        self,
+    ):
+        mission = self._bridge().create_mission(
+            TechnologyEvaluationRequest(
+                project_id="mitigate-ai-platform",
+                candidate=self._candidate(),
+            )
+        )
+
+        self.assertEqual(
+            mission["payload"]["deliverables"],
+            [
+                "docs/technology/evaluations/"
+                "ruflo/3.37.0.json"
+            ],
+        )
+
+    def test_artifact_path_is_repository_relative(
+        self,
+    ):
+        path = (
+            TechnologyEvaluationMissionBridge
+            ._evaluation_artifact_path(
+                "Ruflo",
+                "3.37.0",
+            )
+        )
+
+        self.assertFalse(
+            path.startswith("/")
+        )
+
+        self.assertNotIn(
+            "..",
+            path.split("/"),
+        )
+
+    def test_artifact_path_normalizes_technology_and_version(
+        self,
+    ):
+        path = (
+            TechnologyEvaluationMissionBridge
+            ._evaluation_artifact_path(
+                "Example Technology",
+                "v1.2.3+preview",
+            )
+        )
+
+        self.assertEqual(
+            path,
+            "docs/technology/evaluations/"
+            "example-technology/v1.2.3-preview.json",
+        )
