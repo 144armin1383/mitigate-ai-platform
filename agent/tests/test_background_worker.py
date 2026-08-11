@@ -550,3 +550,210 @@ class BackgroundWorkerReportingCliTests(
             "mitigate-ai-platform",
             args.project_id,
         )
+
+
+class FakeLifecycleHook:
+    def __init__(
+        self,
+        *,
+        fail=False,
+    ):
+        self.calls = []
+        self.fail = fail
+
+    def after_persist(
+        self,
+        *,
+        mission,
+        report,
+    ):
+        self.calls.append(
+            {
+                "mission": dict(
+                    mission
+                ),
+                "report": dict(
+                    report
+                ),
+            }
+        )
+
+        if self.fail:
+            raise RuntimeError(
+                "simulated lifecycle failure"
+            )
+
+        return {
+            "handled": True,
+        }
+
+
+class BackgroundWorkerLifecycleHookTests(
+    unittest.TestCase
+):
+    def test_hook_runs_after_successful_report_persist(
+        self,
+    ):
+        queue = FakeMissionQueue([
+            {
+                "id":
+                    "lifecycle-report-1",
+                "outcome":
+                    "success",
+            },
+        ])
+
+        class Controller:
+            def execute(
+                self,
+                mission,
+            ):
+                return {
+                    "status":
+                        "success",
+                    "merged_to_main":
+                        True,
+                }
+
+        reporter = (
+            FakeExecutionReporter()
+        )
+
+        hook = FakeLifecycleHook()
+
+        worker = BackgroundWorker(
+            queue=queue,
+            controller=Controller(),
+            once=True,
+            worker_id="production-worker",
+            poll_interval=0.01,
+            execution_reporter=reporter,
+            lifecycle_hook=hook,
+        )
+
+        worker.run()
+
+        self.assertEqual(
+            "completed",
+            queue.get_state(
+                "lifecycle-report-1"
+            ),
+        )
+
+        self.assertEqual(
+            1,
+            len(reporter.calls),
+        )
+
+        self.assertEqual(
+            1,
+            len(hook.calls),
+        )
+
+    def test_hook_failure_does_not_fail_completed_mission(
+        self,
+    ):
+        queue = FakeMissionQueue([
+            {
+                "id":
+                    "lifecycle-report-2",
+                "outcome":
+                    "success",
+            },
+        ])
+
+        class Controller:
+            def execute(
+                self,
+                mission,
+            ):
+                return {
+                    "status":
+                        "success",
+                    "merged_to_main":
+                        True,
+                }
+
+        reporter = (
+            FakeExecutionReporter()
+        )
+
+        hook = FakeLifecycleHook(
+            fail=True
+        )
+
+        worker = BackgroundWorker(
+            queue=queue,
+            controller=Controller(),
+            once=True,
+            worker_id="production-worker",
+            poll_interval=0.01,
+            execution_reporter=reporter,
+            lifecycle_hook=hook,
+        )
+
+        worker.run()
+
+        self.assertEqual(
+            "completed",
+            queue.get_state(
+                "lifecycle-report-2"
+            ),
+        )
+
+        event_types = [
+            event.get("event")
+            or event.get("type")
+            for event in worker.events
+        ]
+
+        self.assertIn(
+            "lifecycle_hook_failed",
+            event_types,
+        )
+
+    def test_no_hook_preserves_existing_behavior(
+        self,
+    ):
+        queue = FakeMissionQueue([
+            {
+                "id":
+                    "lifecycle-report-3",
+                "outcome":
+                    "success",
+            },
+        ])
+
+        class Controller:
+            def execute(
+                self,
+                mission,
+            ):
+                return {
+                    "status":
+                        "success",
+                    "merged_to_main":
+                        True,
+                }
+
+        reporter = (
+            FakeExecutionReporter()
+        )
+
+        worker = BackgroundWorker(
+            queue=queue,
+            controller=Controller(),
+            once=True,
+            worker_id="production-worker",
+            poll_interval=0.01,
+            execution_reporter=reporter,
+        )
+
+        worker.run()
+
+        self.assertEqual(
+            "completed",
+            queue.get_state(
+                "lifecycle-report-3"
+            ),
+        )

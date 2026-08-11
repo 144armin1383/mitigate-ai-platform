@@ -103,6 +103,7 @@ class BackgroundWorker:
         max_idle_cycles: Optional[int] = None,
         heartbeat_path: Optional[str] = None,
         execution_reporter: Optional[Any] = None,
+        lifecycle_hook: Optional[Any] = None,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be > 0")
@@ -117,6 +118,7 @@ class BackgroundWorker:
         self.max_idle_cycles: Optional[int] = max_idle_cycles
         self.heartbeat_path: Optional[str] = heartbeat_path
         self.execution_reporter: Optional[Any] = execution_reporter
+        self.lifecycle_hook: Optional[Any] = lifecycle_hook
 
         self._shutdown_requested: bool = False
         self._shutdown_event_emitted: bool = False
@@ -264,12 +266,49 @@ class BackgroundWorker:
                     and isinstance(result, dict)
                 ):
                     try:
-                        self.execution_reporter.persist_result(
-                            mission=mission,
-                            controller_result=result,
-                            worker_id=self.worker_id,
-                            final_status="completed",
+                        stored_report = (
+                            self.execution_reporter.persist_result(
+                                mission=mission,
+                                controller_result=result,
+                                worker_id=self.worker_id,
+                                final_status="completed",
+                            )
                         )
+
+                        if (
+                            self.lifecycle_hook is not None
+                            and isinstance(
+                                stored_report,
+                                dict,
+                            )
+                        ):
+                            try:
+                                hook_result = (
+                                    self.lifecycle_hook.after_persist(
+                                        mission=mission,
+                                        report=stored_report,
+                                    )
+                                )
+
+                                if (
+                                    isinstance(
+                                        hook_result,
+                                        dict,
+                                    )
+                                    and hook_result.get(
+                                        "handled"
+                                    )
+                                ):
+                                    self._emit(
+                                        "lifecycle_reconciled",
+                                        mission_id=mission_id,
+                                    )
+
+                            except Exception:
+                                self._emit(
+                                    "lifecycle_hook_failed",
+                                    mission_id=mission_id,
+                                )
                     except Exception:
                         self._emit(
                             "execution_report_failed",
