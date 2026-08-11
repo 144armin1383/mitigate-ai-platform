@@ -109,3 +109,99 @@ class TestCodeGenerator(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RecordingProvider(FakeProvider):
+
+    def __init__(self) -> None:
+        self.last_request: AIRequest | None = None
+
+    def generate(
+        self,
+        request: AIRequest,
+    ) -> AIResponse:
+        self.last_request = request
+        return super().generate(request)
+
+
+class TestCodeGeneratorStructuredOutputContract(
+    TestCodeGenerator
+):
+
+    def test_generation_request_contains_strict_files_schema(
+        self,
+    ) -> None:
+        provider = RecordingProvider()
+
+        generator = CodeGenerator(
+            ai_provider=provider
+        )
+
+        generator.generate(
+            self.plan,
+            self.repo_index,
+        )
+
+        request = provider.last_request
+
+        self.assertIsNotNone(
+            request
+        )
+
+        schema = request.output_schema
+
+        self.assertIsInstance(
+            schema,
+            dict,
+        )
+
+        self.assertEqual(
+            schema["name"],
+            "mitigate_generated_files",
+        )
+
+        self.assertTrue(
+            schema["strict"]
+        )
+
+        root = schema["schema"]
+
+        self.assertEqual(
+            root["type"],
+            "object",
+        )
+
+        self.assertFalse(
+            root["additionalProperties"]
+        )
+
+        self.assertIn(
+            "files",
+            root["required"],
+        )
+
+        files = root["properties"]["files"]
+
+        self.assertEqual(
+            files["type"],
+            "array",
+        )
+
+        self.assertEqual(
+            files["minItems"],
+            1,
+        )
+
+        item = files["items"]
+
+        self.assertFalse(
+            item["additionalProperties"]
+        )
+
+        self.assertEqual(
+            item["required"],
+            [
+                "path",
+                "content",
+            ],
+        )

@@ -110,12 +110,54 @@ class CodeGenerator:
 
         provider = self._get_provider()
 
+        output_schema = {
+            "name": "mitigate_generated_files",
+            "description": (
+                "MITIGATE autonomous mission generation envelope."
+            ),
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                    },
+                    "files": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                },
+                                "content": {
+                                    "type": "string",
+                                },
+                            },
+                            "required": [
+                                "path",
+                                "content",
+                            ],
+                        },
+                    },
+                },
+                "required": [
+                    "summary",
+                    "files",
+                ],
+            },
+        }
+
         request = AIRequest(
             prompt=built.user,
             system_prompt=built.system,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            output_schema=output_schema,
             metadata={
                 "plan": self._plan_to_dict(plan),
                 "repository": repo_index.to_dict(),
@@ -130,6 +172,7 @@ class CodeGenerator:
                 "model": request.model,
                 "temperature": request.temperature,
                 "max_tokens": request.max_tokens,
+                "output_schema": request.output_schema,
                 "metadata": request.metadata,
             },
             "response": {

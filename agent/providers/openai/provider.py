@@ -39,14 +39,37 @@ class OpenAIProvider(AIProvider):
             )
 
         try:
-            response = self.client.responses.create(
-                model=model,
-                instructions=(
+            request_kwargs = {
+                "model": model,
+                "instructions": (
                     request.system_prompt
                     or "You are the MITIGATE AI software engineering agent."
                 ),
-                input=request.prompt,
-                max_output_tokens=request.max_tokens,
+                "input": request.prompt,
+                "max_output_tokens": request.max_tokens,
+            }
+
+            if request.output_schema is not None:
+                request_kwargs["text"] = {
+                    "format": {
+                        "type": "json_schema",
+                        "name": request.output_schema["name"],
+                        "description": request.output_schema.get(
+                            "description",
+                            "",
+                        ),
+                        "schema": request.output_schema["schema"],
+                        "strict": bool(
+                            request.output_schema.get(
+                                "strict",
+                                True,
+                            )
+                        ),
+                    }
+                }
+
+            response = self.client.responses.create(
+                **request_kwargs
             )
 
             usage = {}

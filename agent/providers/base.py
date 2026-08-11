@@ -12,6 +12,7 @@ class AIRequest:
     model: str | None = None
     temperature: float = 0.2
     max_tokens: int | None = None
+    output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
