@@ -277,6 +277,139 @@ class ProductionExecutionReporter:
             execution_id
         )
 
+    def find_by_mission_id(
+        self,
+        mission_id: str,
+    ) -> Optional[dict[str, Any]]:
+        candidate = str(mission_id).strip()
+
+        if not candidate:
+            raise ValueError("invalid_mission_id")
+
+        reports_dir = (
+            self.storage_dir
+            / "reports"
+            / "by-execution"
+        )
+
+        if not reports_dir.exists():
+            return None
+
+        matches: list[dict[str, Any]] = []
+
+        for path in sorted(
+            reports_dir.glob("*.json")
+        ):
+            try:
+                import json
+
+                report = json.loads(
+                    path.read_text(
+                        encoding="utf-8"
+                    )
+                )
+            except Exception:
+                continue
+
+            if not isinstance(report, dict):
+                continue
+
+            if (
+                report.get("project_id")
+                == self.project_id
+                and report.get("mission_id")
+                == candidate
+            ):
+                matches.append(report)
+
+        if not matches:
+            return None
+
+        matches.sort(
+            key=lambda item: (
+                str(
+                    item.get(
+                        "completed_at",
+                        "",
+                    )
+                ),
+                str(
+                    item.get(
+                        "execution_id",
+                        "",
+                    )
+                ),
+            ),
+            reverse=True,
+        )
+
+        return matches[0]
+
+    def find_by_request_id(
+        self,
+        request_id: str,
+    ) -> list[dict[str, Any]]:
+        candidate = str(request_id).strip()
+
+        if not candidate:
+            raise ValueError("invalid_request_id")
+
+        reports_dir = (
+            self.storage_dir
+            / "reports"
+            / "by-execution"
+        )
+
+        if not reports_dir.exists():
+            return []
+
+        reports: list[dict[str, Any]] = []
+
+        for path in sorted(
+            reports_dir.glob("*.json")
+        ):
+            try:
+                import json
+
+                report = json.loads(
+                    path.read_text(
+                        encoding="utf-8"
+                    )
+                )
+            except Exception:
+                continue
+
+            if not isinstance(report, dict):
+                continue
+
+            if (
+                report.get("project_id")
+                == self.project_id
+                and report.get("request_id")
+                == candidate
+            ):
+                reports.append(report)
+
+        reports.sort(
+            key=lambda item: (
+                str(
+                    item.get(
+                        "completed_at",
+                        "",
+                    )
+                ),
+                str(
+                    item.get(
+                        "execution_id",
+                        "",
+                    )
+                ),
+            ),
+            reverse=True,
+        )
+
+        return reports
+
     def status(self) -> dict[str, Any]:
         return self._writer.status(
             project_id=self.project_id

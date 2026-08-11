@@ -107,6 +107,47 @@ class FakeRuntimeService:
         )
         return dict(self.submit_result)
 
+    def get_mission(self, mission_id: str) -> dict:
+        self.calls.append(
+            ("get_mission", (mission_id,), {})
+        )
+
+        if mission_id == "missing-mission":
+            raise KeyError("mission_not_found")
+
+        return {
+            "id": mission_id,
+            "state": "completed",
+        }
+
+    def get_execution(self, execution_id: str) -> dict:
+        self.calls.append(
+            ("get_execution", (execution_id,), {})
+        )
+
+        if execution_id == "missing-execution":
+            raise KeyError("execution_not_found")
+
+        return {
+            "execution_id": execution_id,
+            "status": "completed",
+            "success": True,
+        }
+
+    def get_request_status(self, request_id: str) -> dict:
+        self.calls.append(
+            ("get_request_status", (request_id,), {})
+        )
+
+        if request_id == "missing-request":
+            raise KeyError("request_not_found")
+
+        return {
+            "request_id": request_id,
+            "status": "completed",
+            "missions": [],
+        }
+
     # Execution outcome
     def report_execution_outcome(self, outcome: dict) -> dict:
         self.calls.append(("report_execution_outcome", (outcome,), {}))
@@ -525,6 +566,200 @@ class TestRuntimePrivateAPIRequestContract(
         self.assertNotIn(
             "data",
             payload,
+        )
+
+
+@unittest.skipUnless(
+    RPA_AVAILABLE,
+    "runtime_private_api module not available",
+)
+class TestRuntimePrivateAPIStatusEndpoints(
+    unittest.TestCase
+):
+    def setUp(self) -> None:
+        self.token = "runtime-status-token"
+        self.runtime = FakeRuntimeService()
+
+        config = rpa.RuntimeAPIConfig(
+            host="127.0.0.1",
+            port=0,
+            auth_token_reference=(
+                "runtime-status-token-ref"
+            ),
+        )
+
+        self.api = rpa.RuntimePrivateAPI(
+            config=config,
+            runtime=self.runtime,
+            token_resolver=lambda: self.token,
+        )
+
+        self.api.start()
+
+        address = self.api.address()
+
+        if (
+            not isinstance(address, tuple)
+            or len(address) < 2
+        ):
+            self.api.close()
+            self.fail("Runtime API did not bind")
+
+        self.host = str(address[0])
+        self.port = int(address[1])
+
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        try:
+            self.api.stop()
+        finally:
+            self.api.close()
+
+    def _get(
+        self,
+        path,
+        token=True,
+    ):
+        conn = http.client.HTTPConnection(
+            self.host,
+            self.port,
+            timeout=2,
+        )
+
+        headers = {
+            "Accept": "application/json",
+        }
+
+        if token is True:
+            headers["Authorization"] = (
+                f"Bearer {self.token}"
+            )
+        elif isinstance(token, str):
+            headers["Authorization"] = (
+                f"Bearer {token}"
+            )
+
+        try:
+            conn.request(
+                "GET",
+                path,
+                headers=headers,
+            )
+
+            response = conn.getresponse()
+            payload = json.loads(
+                response.read().decode("utf-8")
+            )
+
+            return response.status, payload
+        finally:
+            conn.close()
+
+    def test_get_mission_success(self):
+        status, payload = self._get(
+            "/v1/missions/m-status-1"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+
+        self.assertEqual(
+            payload["data"]["id"],
+            "m-status-1",
+        )
+
+    def test_get_execution_success(self):
+        status, payload = self._get(
+            "/v1/executions/exec-status-1"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+
+        self.assertEqual(
+            payload["data"]["execution_id"],
+            "exec-status-1",
+        )
+
+    def test_get_request_status_success(self):
+        status, payload = self._get(
+            "/v1/requests/req-status-1/status"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+
+        self.assertEqual(
+            payload["data"]["request_id"],
+            "req-status-1",
+        )
+
+        self.assertEqual(
+            payload["data"]["status"],
+            "completed",
+        )
+
+    def test_get_mission_not_found(self):
+        status, payload = self._get(
+            "/v1/missions/missing-mission"
+        )
+
+        self.assertEqual(status, 404)
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "mission_not_found",
+        )
+
+    def test_get_execution_not_found(self):
+        status, payload = self._get(
+            "/v1/executions/missing-execution"
+        )
+
+        self.assertEqual(status, 404)
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "execution_not_found",
+        )
+
+    def test_get_request_not_found(self):
+        status, payload = self._get(
+            "/v1/requests/missing-request/status"
+        )
+
+        self.assertEqual(status, 404)
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "request_not_found",
+        )
+
+    def test_get_status_endpoint_requires_auth(self):
+        status, payload = self._get(
+            "/v1/missions/m-status-1",
+            token=False,
+        )
+
+        self.assertEqual(status, 401)
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "missing_authentication",
+        )
+
+    def test_get_status_endpoint_rejects_bad_auth(self):
+        status, payload = self._get(
+            "/v1/executions/exec-status-1",
+            token="wrong-token",
+        )
+
+        self.assertEqual(status, 403)
+
+        self.assertEqual(
+            payload["error"]["code"],
+            "invalid_authentication",
         )
 
 

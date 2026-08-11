@@ -83,6 +83,8 @@ _FAILURE_STATUS_MAP: Dict[str, int] = {
     "duplicate_execution": 409,
     "invalid_status_transition": 409,
     "mission_not_found": 404,
+    "execution_not_found": 404,
+    "request_not_found": 404,
     "budget_blocked": 429,
     "rate_limit_blocked": 429,
     "unknown_project": 404,
@@ -463,6 +465,113 @@ class RuntimePrivateAPI:
                         self._emit_request_event("request_completed", http_status=200)
                         return
 
+                    route_parts = [
+                        part
+                        for part in path.split("/")
+                        if part
+                    ]
+
+                    try:
+                        if (
+                            len(route_parts) == 3
+                            and route_parts[0] == "v1"
+                            and route_parts[1] == "missions"
+                        ):
+                            self._emit_request_event(
+                                "request_received"
+                            )
+                            data = _call_runtime(
+                                api._runtime,
+                                "get_mission",
+                                route_parts[2],
+                            )
+                            self._write_json_response(
+                                200,
+                                {
+                                    "ok": True,
+                                    "status": 200,
+                                    "timestamp": _utc_now_iso(),
+                                    "data": data,
+                                },
+                            )
+                            self._emit_request_event(
+                                "request_completed",
+                                http_status=200,
+                            )
+                            return
+
+                        if (
+                            len(route_parts) == 3
+                            and route_parts[0] == "v1"
+                            and route_parts[1] == "executions"
+                        ):
+                            self._emit_request_event(
+                                "request_received"
+                            )
+                            data = _call_runtime(
+                                api._runtime,
+                                "get_execution",
+                                route_parts[2],
+                            )
+                            self._write_json_response(
+                                200,
+                                {
+                                    "ok": True,
+                                    "status": 200,
+                                    "timestamp": _utc_now_iso(),
+                                    "data": data,
+                                },
+                            )
+                            self._emit_request_event(
+                                "request_completed",
+                                http_status=200,
+                            )
+                            return
+
+                        if (
+                            len(route_parts) == 4
+                            and route_parts[0] == "v1"
+                            and route_parts[1] == "requests"
+                            and route_parts[3] == "status"
+                        ):
+                            self._emit_request_event(
+                                "request_received"
+                            )
+                            data = _call_runtime(
+                                api._runtime,
+                                "get_request_status",
+                                route_parts[2],
+                            )
+                            self._write_json_response(
+                                200,
+                                {
+                                    "ok": True,
+                                    "status": 200,
+                                    "timestamp": _utc_now_iso(),
+                                    "data": data,
+                                },
+                            )
+                            self._emit_request_event(
+                                "request_completed",
+                                http_status=200,
+                            )
+                            return
+                    except Exception as ex:
+                        http_code, code = _map_failure(
+                            ex
+                        )
+                        self._emit_request_event(
+                            "request_rejected",
+                            http_status=http_code,
+                            failure_code=code,
+                        )
+                        self._immediate_error(
+                            http_code,
+                            code,
+                            _safe_error_message(code),
+                        )
+                        return
+
                     # Unknown route
                     self._emit_request_event("request_received")
                     self._emit_request_event("request_rejected", http_status=404, failure_code="not_found")
@@ -742,6 +851,8 @@ def _safe_error_message(code: str) -> str:
         "duplicate_execution": "Duplicate execution",
         "invalid_status_transition": "Invalid status transition",
         "mission_not_found": "Not found",
+        "execution_not_found": "Not found",
+        "request_not_found": "Not found",
         "budget_blocked": "Resource temporarily unavailable",
         "rate_limit_blocked": "Rate limited",
         "unknown_project": "Not found",
@@ -773,15 +884,23 @@ def _map_failure(ex: Exception) -> Tuple[int, str]:
     if not isinstance(code, str) or not code:
         code = getattr(ex, "error_code", None)
     if not isinstance(code, str) or not code:
-        # Try class-name based mapping (optional)
-        name = ex.__class__.__name__.lower()
-        # Map a few common aliases if available
-        alias_map = {
-            "invalidrequest": "invalid_request",
-            "invalidexecutionoutcome": "invalid_execution_outcome",
-            "runtimenotrunning": "runtime_not_running",
-        }
-        code = alias_map.get(name, "internal_error")
+        if (
+            isinstance(ex, KeyError)
+            and len(ex.args) == 1
+            and isinstance(ex.args[0], str)
+            and ex.args[0] in _FAILURE_STATUS_MAP
+        ):
+            code = ex.args[0]
+        else:
+            # Try class-name based mapping (optional)
+            name = ex.__class__.__name__.lower()
+            # Map a few common aliases if available
+            alias_map = {
+                "invalidrequest": "invalid_request",
+                "invalidexecutionoutcome": "invalid_execution_outcome",
+                "runtimenotrunning": "runtime_not_running",
+            }
+            code = alias_map.get(name, "internal_error")
     http_code = _FAILURE_STATUS_MAP.get(code, 500 if code == "internal_error" else _FAILURE_STATUS_MAP.get(code, 500))
     if http_code == 500 and code != "internal_error":
         # Unknown code -> generic internal error to avoid leaking details

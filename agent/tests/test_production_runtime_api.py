@@ -242,5 +242,196 @@ class ProductionRuntimeAPITests(
         )
 
 
+class FakeStatusQueue:
+    def __init__(self):
+        self.items = {
+            "m-status-1": {
+                "id": "m-status-1",
+                "priority": 8,
+                "dependencies": [],
+                "state": "completed",
+                "created_seq": 1,
+                "attempts_done": 0,
+                "max_retries": 0,
+            }
+        }
+
+    def get(self, mission_id):
+        if mission_id not in self.items:
+            raise KeyError(mission_id)
+
+        return dict(
+            self.items[mission_id]
+        )
+
+    def list(self):
+        return [
+            dict(item)
+            for item in self.items.values()
+        ]
+
+
+class FakeStatusReporter:
+    def __init__(self):
+        self.report = {
+            "execution_id": "exec-status-1",
+            "project_id": "mitigate",
+            "request_id": "req-status-1",
+            "mission_id": "m-status-1",
+            "status": "completed",
+            "success": True,
+            "task_type": "documentation",
+            "changed_files": [
+                "docs/runtime/STATUS_API.md"
+            ],
+            "git_branch": (
+                "agent/mission-m-status-1"
+            ),
+            "git_commit": "a" * 40,
+            "validation_status": "validated",
+            "metadata": {
+                "risk_level": "low",
+                "merge_recommendation": "approve",
+                "merged_to_main": True,
+            },
+        }
+
+    def get_report(self, execution_id):
+        if execution_id != "exec-status-1":
+            raise RuntimeError(
+                "Report not found for execution_id"
+            )
+
+        return dict(self.report)
+
+    def find_by_request_id(self, request_id):
+        if request_id != "req-status-1":
+            return []
+
+        return [
+            dict(self.report)
+        ]
+
+
+class ProductionRuntimeStatusContractTests(
+    unittest.TestCase
+):
+
+    def build_runtime(self):
+        return ProductionRuntimeFacade(
+            FakeRequestFlow(),
+            queue=FakeStatusQueue(),
+            execution_reporter=FakeStatusReporter(),
+        )
+
+    def test_get_mission_returns_persisted_state(self):
+        runtime = self.build_runtime()
+
+        result = runtime.get_mission(
+            "m-status-1"
+        )
+
+        self.assertEqual(
+            result["id"],
+            "m-status-1",
+        )
+
+        self.assertEqual(
+            result["state"],
+            "completed",
+        )
+
+    def test_get_mission_not_found(self):
+        runtime = self.build_runtime()
+
+        with self.assertRaisesRegex(
+            KeyError,
+            "mission_not_found",
+        ):
+            runtime.get_mission(
+                "missing-mission"
+            )
+
+    def test_get_execution_returns_report(self):
+        runtime = self.build_runtime()
+
+        result = runtime.get_execution(
+            "exec-status-1"
+        )
+
+        self.assertEqual(
+            result["execution_id"],
+            "exec-status-1",
+        )
+
+        self.assertEqual(
+            result["request_id"],
+            "req-status-1",
+        )
+
+    def test_get_execution_not_found(self):
+        runtime = self.build_runtime()
+
+        with self.assertRaisesRegex(
+            KeyError,
+            "execution_not_found",
+        ):
+            runtime.get_execution(
+                "missing-execution"
+            )
+
+    def test_request_status_aggregates_mission_and_execution(
+        self,
+    ):
+        runtime = self.build_runtime()
+
+        result = runtime.get_request_status(
+            "req-status-1"
+        )
+
+        self.assertEqual(
+            result["request_id"],
+            "req-status-1",
+        )
+
+        self.assertEqual(
+            result["status"],
+            "completed",
+        )
+
+        self.assertEqual(
+            len(result["missions"]),
+            1,
+        )
+
+        item = result["missions"][0]
+
+        self.assertEqual(
+            item["mission"]["id"],
+            "m-status-1",
+        )
+
+        self.assertEqual(
+            item["execution"]["execution_id"],
+            "exec-status-1",
+        )
+
+        self.assertEqual(
+            item["execution"]["git_commit"],
+            "a" * 40,
+        )
+
+    def test_request_status_not_found(self):
+        runtime = self.build_runtime()
+
+        with self.assertRaisesRegex(
+            KeyError,
+            "request_not_found",
+        ):
+            runtime.get_request_status(
+                "missing-request"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

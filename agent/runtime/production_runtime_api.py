@@ -15,6 +15,10 @@ from agent.api.runtime_private_api import (
 from agent.runtime.production_request_composition import (
     build_production_request_composition,
 )
+from agent.runtime.mission_queue import MissionQueue
+from agent.runtime.production_execution_reporter import (
+    ProductionExecutionReporter,
+)
 from agent.orchestrator.request_gate_selector import (
     ModelInfo,
 )
@@ -28,8 +32,18 @@ class ProductionRuntimeFacade:
     This process owns only request ingress and production request composition.
     """
 
-    def __init__(self, request_flow: Any) -> None:
+    def __init__(
+        self,
+        request_flow: Any,
+        *,
+        queue: Optional[MissionQueue] = None,
+        execution_reporter: Optional[
+            ProductionExecutionReporter
+        ] = None,
+    ) -> None:
         self._request_flow = request_flow
+        self._queue = queue
+        self._execution_reporter = execution_reporter
         self._running = False
 
     def start(self) -> dict[str, Any]:
@@ -57,6 +71,145 @@ class ProductionRuntimeFacade:
         return self._request_flow.submit(
             request
         )
+
+    def get_mission(
+        self,
+        mission_id: str,
+    ) -> dict[str, Any]:
+        if self._queue is None:
+            raise RuntimeError(
+                "queue_resolution_failed"
+            )
+
+        try:
+            return self._queue.get(
+                mission_id
+            )
+        except KeyError as exc:
+            raise KeyError(
+                "mission_not_found"
+            ) from exc
+
+    def get_execution(
+        self,
+        execution_id: str,
+    ) -> dict[str, Any]:
+        if self._execution_reporter is None:
+            raise RuntimeError(
+                "report_persistence_failed"
+            )
+
+        try:
+            return (
+                self._execution_reporter
+                .get_report(execution_id)
+            )
+        except Exception as exc:
+            if "not found" in str(exc).lower():
+                raise KeyError(
+                    "execution_not_found"
+                ) from exc
+            raise
+
+    def get_request_status(
+        self,
+        request_id: str,
+    ) -> dict[str, Any]:
+        if self._queue is None:
+            raise RuntimeError(
+                "queue_resolution_failed"
+            )
+
+        if self._execution_reporter is None:
+            raise RuntimeError(
+                "report_persistence_failed"
+            )
+
+        reports = (
+            self._execution_reporter
+            .find_by_request_id(request_id)
+        )
+
+        report_by_mission = {
+            str(report.get("mission_id")): report
+            for report in reports
+            if report.get("mission_id")
+        }
+
+        missions = []
+
+        for mission in self._queue.list():
+            mission_id = str(
+                mission.get("id") or ""
+            )
+
+            report = report_by_mission.get(
+                mission_id
+            )
+
+            if report is None:
+                continue
+
+            missions.append(
+                {
+                    "mission": mission,
+                    "execution": report,
+                }
+            )
+
+        if not missions:
+            raise KeyError(
+                "request_not_found"
+            )
+
+        states = [
+            str(
+                item["mission"].get(
+                    "state",
+                    "",
+                )
+            ).lower()
+            for item in missions
+        ]
+
+        if states and all(
+            state == "completed"
+            for state in states
+        ):
+            status = "completed"
+        elif any(
+            state == "running"
+            for state in states
+        ):
+            status = "running"
+        elif any(
+            state == "retrying"
+            for state in states
+        ):
+            status = "retrying"
+        elif any(
+            state == "failed"
+            for state in states
+        ):
+            status = "failed"
+        elif any(
+            state == "blocked"
+            for state in states
+        ):
+            status = "blocked"
+        elif any(
+            state == "cancelled"
+            for state in states
+        ):
+            status = "cancelled"
+        else:
+            status = "pending"
+
+        return {
+            "request_id": request_id,
+            "status": status,
+            "missions": missions,
+        }
 
     def runtime_status(
         self,
@@ -385,8 +538,30 @@ def build_production_runtime(
         )
     )
 
+    queue = MissionQueue(
+        str(
+            Path(queue_path).resolve()
+        )
+    )
+
+    execution_reporter = (
+        ProductionExecutionReporter(
+            storage_dir=(
+                Path(queue_path)
+                .resolve()
+                .parent
+                / "execution-reports"
+            ),
+            project_id=project_id,
+        )
+    )
+
     return ProductionRuntimeFacade(
-        composition.request_flow
+        composition.request_flow,
+        queue=queue,
+        execution_reporter=(
+            execution_reporter
+        ),
     )
 
 
