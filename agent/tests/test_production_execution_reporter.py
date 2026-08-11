@@ -211,5 +211,59 @@ class ProductionExecutionReporterTests(
             )
 
 
+    def test_internal_files_are_persisted_in_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reporter = ProductionExecutionReporter(
+                storage_dir=td,
+                project_id="mitigate-ai-platform",
+            )
+
+            stored = reporter.persist_result(
+                mission={
+                    "id": "m-report-internal-files",
+                },
+                controller_result={
+                    "status": "success",
+                    "request_id": "req-internal-files",
+                    "task_type": "documentation",
+                    "branch": (
+                        "agent/mission-"
+                        "m-report-internal-files"
+                    ),
+                    "git_commit": "a" * 40,
+                    "changed_files": [
+                        "docs/runtime/STATUS.md",
+                    ],
+                    "internal_files": [
+                        "agent/missions/"
+                        "m-report-internal-files.md",
+                    ],
+                    "risk_level": "low",
+                    "merge_recommendation": "approve",
+                    "merged_to_main": True,
+                    "reason": None,
+                },
+                worker_id="production-worker",
+                final_status="completed",
+            )
+
+            self.assertEqual(
+                stored["changed_files"],
+                [
+                    "docs/runtime/STATUS.md",
+                ],
+            )
+
+            self.assertEqual(
+                stored["metadata"]["internal_files"],
+                [
+                    "agent/missions/"
+                    "m-report-internal-files.md",
+                ],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

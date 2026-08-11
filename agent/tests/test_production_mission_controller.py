@@ -744,6 +744,15 @@ class ProductionMissionControllerReportingContractTests(unittest.TestCase):
                     "added": [
                         {
                             "path": (
+                                "agent/missions/"
+                                "report_contract.md"
+                            ),
+                            "status": "A",
+                            "insertions": 12,
+                            "deletions": 0,
+                        },
+                        {
+                            "path": (
                                 "docs/runtime/"
                                 "REPORT_CONTRACT.md"
                             ),
@@ -782,6 +791,14 @@ class ProductionMissionControllerReportingContractTests(unittest.TestCase):
                     "REPORT_CONTRACT.md"
                 ],
                 result["changed_files"],
+            )
+
+            self.assertEqual(
+                [
+                    "agent/missions/"
+                    "report_contract.md"
+                ],
+                result["internal_files"],
             )
             self.assertEqual(
                 branch,

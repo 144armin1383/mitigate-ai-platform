@@ -112,15 +112,16 @@ class ProductionMissionController:
         return metadata
 
     @staticmethod
-    def _changed_files_from_review(
+    def _classified_files_from_review(
         review: Dict[str, Any],
-    ) -> list[str]:
+    ) -> tuple[list[str], list[str]]:
         files = review.get("files", {})
 
         if not isinstance(files, dict):
-            return []
+            return [], []
 
         changed: list[str] = []
+        internal: list[str] = []
 
         for category in (
             "added",
@@ -141,10 +142,21 @@ class ProductionMissionController:
                     entry.get("path") or ""
                 ).strip()
 
-                if candidate and candidate not in changed:
-                    changed.append(candidate)
+                if not candidate:
+                    continue
 
-        return changed
+                target = (
+                    internal
+                    if candidate.startswith(
+                        "agent/missions/"
+                    )
+                    else changed
+                )
+
+                if candidate not in target:
+                    target.append(candidate)
+
+        return changed, internal
 
     def _git_commit(
         self,
@@ -358,6 +370,12 @@ class ProductionMissionController:
                 "local_main_rolled_back": True,
             }
 
+        changed_files, internal_files = (
+            self._classified_files_from_review(
+                review
+            )
+        )
+
         return {
             "status": "success",
             "reason": None,
@@ -365,11 +383,8 @@ class ProductionMissionController:
             "risk_level": risk_level,
             "merge_recommendation": recommendation,
             "merged_to_main": True,
-            "changed_files": (
-                self._changed_files_from_review(
-                    review
-                )
-            ),
+            "changed_files": changed_files,
+            "internal_files": internal_files,
             "git_commit": self._git_commit(branch),
         }
 

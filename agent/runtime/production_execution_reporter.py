@@ -203,6 +203,14 @@ class ProductionExecutionReporter:
         if not isinstance(changed_files, list):
             changed_files = []
 
+        internal_files = controller_result.get(
+            "internal_files",
+            [],
+        )
+
+        if not isinstance(internal_files, list):
+            internal_files = []
+
         metadata = {
             "risk_level": controller_result.get(
                 "risk_level"
@@ -221,6 +229,7 @@ class ProductionExecutionReporter:
             "reason": controller_result.get(
                 "reason"
             ),
+            "internal_files": internal_files,
         }
 
         return self.persist(
