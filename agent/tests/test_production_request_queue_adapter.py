@@ -64,6 +64,15 @@ class ProductionRequestQueueAdapterTests(unittest.TestCase):
 
             self.assertTrue(definition.exists())
 
+            definition_text = definition.read_text(
+                encoding="utf-8"
+            )
+
+            self.assertIn(
+                "Request ID: req-1",
+                definition_text,
+            )
+
             queue = MissionQueue(
                 str(root / "data" / "missions.json")
             )
@@ -173,6 +182,24 @@ class ProductionRequestQueueAdapterTests(unittest.TestCase):
                 ),
                 "existing",
             )
+
+    def test_request_id_resolves_enqueued_mission(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            adapter = self.build_adapter(root)
+
+            adapter.enqueue_batch(
+                [self.mission()]
+            )
+
+            self.assertEqual(
+                adapter.mission_ids_for_request(
+                    "req-1"
+                ),
+                ["request_smoke"],
+            )
+
+
 
 
 if __name__ == "__main__":

@@ -313,6 +313,17 @@ class FakeStatusReporter:
         ]
 
 
+class FakeRequestQueueAdapter:
+    def mission_ids_for_request(
+        self,
+        request_id,
+    ):
+        if request_id == "req-status-1":
+            return ["m-status-1"]
+
+        return []
+
+
 class ProductionRuntimeStatusContractTests(
     unittest.TestCase
 ):
@@ -322,6 +333,9 @@ class ProductionRuntimeStatusContractTests(
             FakeRequestFlow(),
             queue=FakeStatusQueue(),
             execution_reporter=FakeStatusReporter(),
+            request_queue_adapter=(
+                FakeRequestQueueAdapter()
+            ),
         )
 
     def test_get_mission_returns_persisted_state(self):
@@ -419,6 +433,90 @@ class ProductionRuntimeStatusContractTests(
         self.assertEqual(
             item["execution"]["git_commit"],
             "a" * 40,
+        )
+
+    def test_request_status_exists_before_execution_report(
+        self,
+    ):
+        runtime = self.build_runtime()
+
+        runtime._execution_reporter.find_by_request_id = (
+            lambda request_id: []
+        )
+
+        result = runtime.get_request_status(
+            "req-status-1"
+        )
+
+        self.assertEqual(
+            result["request_id"],
+            "req-status-1",
+        )
+
+        self.assertEqual(
+            result["status"],
+            "completed",
+        )
+
+        self.assertEqual(
+            len(result["missions"]),
+            1,
+        )
+
+        self.assertIsNone(
+            result["missions"][0]["execution"]
+        )
+
+    def test_request_status_pending_before_execution_report(
+        self,
+    ):
+        runtime = self.build_runtime()
+
+        runtime._queue.items[
+            "m-status-1"
+        ]["state"] = "pending"
+
+        runtime._execution_reporter.find_by_request_id = (
+            lambda request_id: []
+        )
+
+        result = runtime.get_request_status(
+            "req-status-1"
+        )
+
+        self.assertEqual(
+            result["status"],
+            "pending",
+        )
+
+        self.assertIsNone(
+            result["missions"][0]["execution"]
+        )
+
+    def test_request_status_running_before_execution_report(
+        self,
+    ):
+        runtime = self.build_runtime()
+
+        runtime._queue.items[
+            "m-status-1"
+        ]["state"] = "running"
+
+        runtime._execution_reporter.find_by_request_id = (
+            lambda request_id: []
+        )
+
+        result = runtime.get_request_status(
+            "req-status-1"
+        )
+
+        self.assertEqual(
+            result["status"],
+            "running",
+        )
+
+        self.assertIsNone(
+            result["missions"][0]["execution"]
         )
 
     def test_request_status_not_found(self):

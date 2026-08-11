@@ -107,6 +107,14 @@ class ProductionRequestQueueAdapter:
         title = str(mission.get("title") or mission_id).strip()
         description = str(mission.get("description") or "").strip()
         task_type = str(mission.get("task_type") or "general").strip()
+        request_id = str(
+            mission.get("request_id") or ""
+        ).strip()
+
+        if not request_id:
+            raise ValueError(
+                "invalid_request_id"
+            )
 
         payload = self._validate_payload(
             mission.get("payload", {})
@@ -155,6 +163,7 @@ class ProductionRequestQueueAdapter:
         return (
             f"# {title}\n\n"
             f"Mission ID: {mission_id}\n"
+            f"Request ID: {request_id}\n"
             f"Task Type: {task_type}\n\n"
             "## Objective\n\n"
             f"{description}\n\n"
@@ -184,7 +193,16 @@ class ProductionRequestQueueAdapter:
         ):
             raise ValueError("missions_must_be_sequence")
 
-        prepared: list[tuple[str, int, list[str], Path, str]] = []
+        prepared: list[
+            tuple[
+                str,
+                int,
+                list[str],
+                Path,
+                str,
+                str,
+            ]
+        ] = []
         ids: set[str] = set()
 
         for mission in missions:
@@ -221,6 +239,15 @@ class ProductionRequestQueueAdapter:
 
             content = self._render_definition(mission)
 
+            request_id = str(
+                mission.get("request_id") or ""
+            ).strip()
+
+            if not request_id:
+                raise ValueError(
+                    "invalid_request_id"
+                )
+
             prepared.append(
                 (
                     mission_id,
@@ -228,11 +255,12 @@ class ProductionRequestQueueAdapter:
                     dependencies,
                     path,
                     content,
+                    request_id,
                 )
             )
 
         known_ids = set(ids)
-        for _, _, dependencies, _, _ in prepared:
+        for _, _, dependencies, _, _, _ in prepared:
             for dependency in dependencies:
                 if dependency not in known_ids:
                     existing = {
@@ -250,11 +278,18 @@ class ProductionRequestQueueAdapter:
         try:
             # Definitions are written before queue visibility so the production
             # worker can never claim a mission without its definition existing.
-            for _, _, _, path, content in prepared:
+            for _, _, _, path, content, _ in prepared:
                 path.write_text(content, encoding="utf-8")
                 written.append(path)
 
-            for mission_id, priority, dependencies, _, _ in prepared:
+            for (
+                mission_id,
+                priority,
+                dependencies,
+                _,
+                _,
+                _,
+            ) in prepared:
                 self.queue.enqueue(
                     mission_id,
                     priority,
@@ -281,6 +316,52 @@ class ProductionRequestQueueAdapter:
             raise
 
         return enqueued
+
+    def mission_ids_for_request(
+        self,
+        request_id: str,
+    ) -> list[str]:
+        request_id = str(
+            request_id or ""
+        ).strip()
+
+        if not request_id:
+            return []
+
+        mission_ids: list[str] = []
+
+        for mission in self.queue.list():
+            mission_id = str(
+                mission.get("id") or ""
+            ).strip()
+
+            if not mission_id:
+                continue
+
+            path = self._definition_path(
+                mission_id
+            )
+
+            if not path.is_file():
+                continue
+
+            try:
+                text = path.read_text(
+                    encoding="utf-8"
+                )
+            except OSError:
+                continue
+
+            expected = (
+                f"Request ID: {request_id}"
+            )
+
+            if expected in text:
+                mission_ids.append(
+                    mission_id
+                )
+
+        return mission_ids
 
     # Explicit aliases supported by QueueEnqueueCoordinator.
     enqueue_many = enqueue_batch

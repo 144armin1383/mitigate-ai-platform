@@ -40,10 +40,14 @@ class ProductionRuntimeFacade:
         execution_reporter: Optional[
             ProductionExecutionReporter
         ] = None,
+        request_queue_adapter: Any = None,
     ) -> None:
         self._request_flow = request_flow
         self._queue = queue
         self._execution_reporter = execution_reporter
+        self._request_queue_adapter = (
+            request_queue_adapter
+        )
         self._running = False
 
     def start(self) -> dict[str, Any]:
@@ -125,6 +129,23 @@ class ProductionRuntimeFacade:
                 "report_persistence_failed"
             )
 
+        if self._request_queue_adapter is None:
+            raise RuntimeError(
+                "queue_resolution_failed"
+            )
+
+        mission_ids = (
+            self._request_queue_adapter
+            .mission_ids_for_request(
+                request_id
+            )
+        )
+
+        if not mission_ids:
+            raise KeyError(
+                "request_not_found"
+            )
+
         reports = (
             self._execution_reporter
             .find_by_request_id(request_id)
@@ -138,22 +159,22 @@ class ProductionRuntimeFacade:
 
         missions = []
 
-        for mission in self._queue.list():
-            mission_id = str(
-                mission.get("id") or ""
-            )
-
-            report = report_by_mission.get(
-                mission_id
-            )
-
-            if report is None:
+        for mission_id in mission_ids:
+            try:
+                mission = self._queue.get(
+                    mission_id
+                )
+            except KeyError:
                 continue
 
             missions.append(
                 {
                     "mission": mission,
-                    "execution": report,
+                    "execution": (
+                        report_by_mission.get(
+                            mission_id
+                        )
+                    ),
                 }
             )
 
@@ -561,6 +582,9 @@ def build_production_runtime(
         queue=queue,
         execution_reporter=(
             execution_reporter
+        ),
+        request_queue_adapter=(
+            composition.queue_adapter
         ),
     )
 
