@@ -1,0 +1,52 @@
+{
+  "integration": "ruflo",
+  "required": false,
+  "production_mode_default": "native",
+  "version_policy": {
+    "discovery": "latest-stable-candidate",
+    "production_activation": "exact-certified-version-only",
+    "floating_versions_allowed": false,
+    "allowed_production_selectors": [
+      "exact-semver"
+    ],
+    "forbidden_production_selectors": [
+      "latest",
+      "next",
+      "alpha",
+      "beta",
+      "rc",
+      "caret-range",
+      "tilde-range",
+      "wildcard",
+      "git-main"
+    ]
+  },
+  "candidate_discovery_sources": [
+    "npm-ruflo-latest-dist-tag",
+    "github-stable-release",
+    "upstream-ruflo-package-json-diagnostic"
+  ],
+  "certified_version": null,
+  "certification_required_checks": [
+    "mitigate-ruflo-adapter-unit-tests",
+    "ruflo-capability-contract-tests",
+    "mitigate-full-test-suite",
+    "native-fallback-test",
+    "production-like-e2e-smoke-test",
+    "rollback-test"
+  ],
+  "upgrade_policy": {
+    "auto_discover_new_stable": true,
+    "auto_install_to_production": false,
+    "auto_promote_to_certified": false,
+    "upgrade_on_isolated_branch": true,
+    "rollback_to_last_certified": true
+  },
+  "independence_contract": {
+    "mitigate_core_must_start_without_ruflo": true,
+    "mitigate_core_must_execute_without_ruflo": true,
+    "ruflo_failure_must_not_stop_runtime": true,
+    "ruflo_memory_must_not_be_canonical_source": true,
+    "github_portable_memory_remains_canonical": true
+  }
+}
