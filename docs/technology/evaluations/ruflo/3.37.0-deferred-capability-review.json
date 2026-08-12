@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "technology_id": "ruflo",
+  "observed_version": "3.37.0",
+  "mission_id": "ruflo-deferred-review-phase-a-20260812181339",
+  "review_type": "deferred_capability_architecture_review",
+  "implementation_required": true,
+  "capabilities": [
+    {
+      "capability_id": "retry_backoff_policy",
+      "decision": "extend_existing",
+      "existing_native_components": [
+        "agent/resilience/capability_kernel.py: central resilience orchestration with retry/circuit breaking hooks",
+        "CircuitBreaker implementation used to short-circuit unstable providers/executions",
+        "Exponential/backoff retry strategy used by execution wrappers",
+        "agent/runtime/background_worker.py: wraps mission/task execution with retry/timeout/deadline/cancellation",
+        "agent/runtime/mission_queue.py: surfaces deadlines and cancellation affecting retry windows",
+        "Provider-level retry handling hooks observed around API invocation wrappers",
+        "Metrics/logging hooks for retry attempts and breaker state transitions in resilience layer"
+      ],
+      "repository_evidence": [
+        "capability_kernel invokes retry engine around capability execution; bounded retries and exponential backoff are present, including circuit breaking",
+        "background_worker respects mission deadlines/cancellation, propagating to retry loops to avoid unbounded extension of run time",
+        "mission_queue publishes dequeue timestamps aiding timeout budgets; cancellation signals terminate retries early",
+        "provider invocation wrappers mark idempotent operations and classify transient vs permanent errors for retry eligibility (partial coverage)",
+        "tests include scenarios for bounded retries and circuit breaker tripping/reset behavior; jitter and retry budget semantics are not consistently validated"
+      ],
+      "overlap_analysis": "A new retry subsystem is not needed. The resilience kernel already owns retries, backoff, and circuit breaking. Extending it to enforce retry budgets, unify retry classification, and standardize jitter can be achieved by augmenting the existing kernel and its adapters without parallel frameworks.",
+      "identified_gap": "Cross-cutting retry budgets (per mission, per capability, and per time window) and a unified retry classification matrix are not consistently enforced across background worker, capability kernel, and provider wrappers. Jitter support appears optional/uneven across strategies, and retry observability (budget remaining, classification, and jittered delays) is not uniformly emitted.",
+      "rationale": "The repository already implements bounded retries, backoff, and circuit breaking with deadline/cancellation integration. However, budgeted retries, first-class retry classification, and uniform jitter/metrics are either partially implemented or distributed. Consolidating these in the existing kernel preserves provider independence and avoids duplication.",
+      "recommendation": "Extend the existing resilience kernel to add: (1) a centralized RetryBudget abstraction with token accounting tied to mission/deadline; (2) a RetryClassification map to normalize retryability across exceptions/status codes; (3) standardized jitter strategy pluggable into backoff; and (4) consistent observability (counters, logs, structured events) for attempts, classification, budget consumption, delays, and circuit transitions.",
+      "proposed_deliverables": [
+        "agent/resilience/capability_kernel.py",
+        "agent/runtime/background_worker.py",
+        "agent/runtime/mission_queue.py",
+        "agent/resilience/retry_budget.py",
+        "agent/resilience/retry_classification.py",
+        "agent/observability/retry_metrics.py",
+        "tests/agent/resilience/test_retry_budget.py",
+        "tests/agent/resilience/test_retry_classification.py",
+        "tests/agent/runtime/test_background_worker_retry_integration.py"
+      ],
+      "production_wiring_required": true,
+      "risks": [
+        "Double-applied retries if provider wrappers and kernel both retry the same operation; must centralize classification and budget consumption in kernel with provider wrappers delegating retry decisions.",
+        "Starvation of long-running tasks if budgets are too strict; provide conservative defaults and config-based overrides.",
+        "Backward-compatibility: ensure default behavior preserves current retry counts and backoff unless explicitly enabled; budget must default to no-op (infinite) to avoid surprise failures.",
+        "Observability overhead: ensure metrics/logging are efficient and can be sampled/disabled without performance regressions."
+      ]
+    },
+    {
+      "capability_id": "task_registry",
+      "decision": "already_native",
+      "existing_native_components": [
+        "CapabilityRegistry providing discovery and registration of capabilities with descriptors",
+        "CapabilityDescriptor metadata driving controller/planner dispatch",
+        "Provider/model registries mapping providers to concrete implementations",
+        "Planner/controller task handling aligned to capability contracts"
+      ],
+      "repository_evidence": [
+        "CapabilityRegistry used as a single source of truth for capabilities and their descriptors; controllers resolve capability handlers via registry lookups.",
+        "Provider and model registries are consulted for binding provider-specific implementations without duplicating task types.",
+        "Planner dispatch uses capability descriptors for task decomposition and routing; tests validate discovery and dispatch paths."
+      ],
+      "overlap_analysis": "A separate TaskRegistry would duplicate the CapabilityRegistry and existing provider/model registries, fragmenting discovery and dispatch logic.",
+      "identified_gap": "No functional gap requiring a new registry. Documentation could clarify how task types map to capability descriptors, but no code changes are needed.",
+      "rationale": "The architecture already unifies capability discovery, provider binding, and planner/controller routing. Introducing a TaskRegistry would increase complexity and maintenance without delivering new function.",
+      "recommendation": "Do not implement a TaskRegistry. Continue using the CapabilityRegistry and provider/model registries for discovery and dispatch.",
+      "proposed_deliverables": [],
+      "production_wiring_required": false,
+      "risks": [
+        "Risk of architectural fragmentation if an additional registry were introduced in the future; keep the single-registry pattern."
+      ]
+    },
+    {
+      "capability_id": "queue_abstraction",
+      "decision": "already_native",
+      "existing_native_components": [
+        "MissionQueue API used by BackgroundWorker and planners",
+        "ProductionQueueCoordinatorAdapter exposing a provider-neutral queue coordinator contract",
+        "PlannerQueueFlowCoordinator linking planning and mission queue operations",
+        "Temporary/test queue adapters used in tests for isolated validation",
+        "Dependency scheduling and retry/recovery semantics integrated with mission execution paths"
+      ],
+      "repository_evidence": [
+        "agent/runtime/mission_queue.py defines the core mission queue abstraction consumed across runtime components.",
+        "BackgroundWorker integrates with MissionQueue for dequeue/ack/nack with retry and cancellation semantics.",
+        "ProductionQueueCoordinatorAdapter provides the production wiring without hard-binding to a specific queue technology; tests validate adapter behavior."
+      ],
+      "overlap_analysis": "A new provider-neutral interface is already present. Adding another abstraction layer or selecting a concrete queue (Redis/SQS/Kafka/Celery) would reduce provider independence and duplicate existing contracts.",
+      "identified_gap": "None requiring design changes. Minor consistency improvements to retry/recovery telemetry can follow the retry policy extension but do not alter the abstraction.",
+      "rationale": "The current abstractions sufficiently decouple queue technology from runtime, planners, and workers.",
+      "recommendation": "Retain the current MissionQueue/coordinator design. No changes required.",
+      "proposed_deliverables": [],
+      "production_wiring_required": false,
+      "risks": [
+        "Introducing additional queue tech or layers would jeopardize provider independence and increase operational burden."
+      ]
+    }
+  ],
+  "phase_b": {
+    "required": true,
+    "objective": "Augment the existing resilience kernel to add a unified retry budget, classification, standardized jitter support, and comprehensive retry observability across BackgroundWorker, CapabilityKernel, and provider invocation wrappers while preserving default behavior and provider independence.",
+    "proposed_deliverables": [
+      "agent/resilience/capability_kernel.py",
+      "agent/runtime/background_worker.py",
+      "agent/runtime/mission_queue.py",
+      "agent/resilience/retry_budget.py",
+      "agent/resilience/retry_classification.py",
+      "agent/observability/retry_metrics.py",
+      "tests/agent/resilience/test_retry_budget.py",
+      "tests/agent/resilience/test_retry_classification.py",
+      "tests/agent/runtime/test_background_worker_retry_integration.py"
+    ],
+    "required_tests": [
+      "tests/agent/resilience/test_retry_budget.py: validates per-mission and per-capability token budgets, time-window enforcement, and no-op defaults",
+      "tests/agent/resilience/test_retry_classification.py: validates mapping of exceptions/status codes to retryability and backoff categories, including idempotent vs non-idempotent ops",
+      "tests/agent/runtime/test_background_worker_retry_integration.py: validates end-to-end retries honoring deadlines, cancellation, jitter delay emissions, budget depletion, and circuit breaker interaction"
+    ],
+    "prohibited_changes": [
+      "Do not redesign or replace durable_checkpointing, flowspec_v1, or idempotent_execution",
+      "Do not introduce external runtime dependencies (no Redis/SQS/Kafka/Celery or new packages)",
+      "Do not create a parallel retry subsystem; extend the existing resilience kernel only",
+      "Do not alter MissionQueue semantics beyond integrating retry budget/jitter observability",
+      "Do not add or change technology registry entries"
+    ],
+    "safety_constraints": [
+      "Preserve provider independence and existing contracts",
+      "Maintain Python 3.12 compatibility and deterministic behavior",
+      "Ensure default configuration preserves current retry/backoff semantics until explicitly enabled",
+      "No access to .env or secret material; no external network calls",
+      "All code and comments in English; avoid side effects in tests (use test adapters)"
+    ]
+  },
+  "overall_assessment": "MITIGATE already provides robust native capability discovery/dispatch and a provider-neutral mission queue abstraction. The resilience kernel covers bounded retries, backoff, and circuit breaking with deadline/cancellation integration. A targeted extension is warranted to unify retry budgets, classification, jitter, and observability without introducing a parallel subsystem. Phase B should scope strictly to this enhancement while preserving existing core capabilities and provider independence.",
+  "external_runtime_dependency_required": false,
+  "provider_independence_preserved": true
+}
