@@ -1,0 +1,57 @@
+{
+  "component": "Autonomous Self-Healing - Allowlist Recovery",
+  "purpose": "Automatically detect valid tokens from events/logs and safely merge them into an allowlist file in a deterministic, auditable manner.",
+  "capabilities": [
+    "Extract candidate tokens from heterogeneous events (strings and dict payloads)",
+    "Validate tokens using a strict default regex or a custom validator",
+    "Idempotent behavior: only new tokens are added, no removals by default",
+    "Atomic file writes to prevent torn or partial files",
+    "Optional backups with deterministic timestamp formatting",
+    "Deterministic ordering of tokens for stable diffs and reviews"
+  ],
+  "inputs": {
+    "allowlist_path": "Path to the allowlist file to read and update",
+    "events": "Iterable of strings or objects from which a candidate token may be extracted",
+    "validator": "Optional callable to accept/reject tokens (defaults to a conservative regex)",
+    "timestamp": "UTC compact format YYYYMMDDTHHMMSSZ for backup filenames (optional)"
+  },
+  "outputs": {
+    "AllowlistDiff": {
+      "additions": "Set of tokens that were added to the allowlist",
+      "removals": "Set of tokens that were removed (empty in recovery mode)",
+      "changed": "Boolean derived from additions/removals"
+    },
+    "filesystem": "Updated allowlist file; optional backup copy when enabled"
+  },
+  "flow": [
+    "Load existing allowlist (if present) and parse into a token set, ignoring comments and blanks",
+    "Extract candidate tokens from events using common keys or direct string lines",
+    "Filter candidates through the token validator and drop existing entries",
+    "If there are changes and backups are enabled, create a backup copy with the provided or generated timestamp",
+    "Serialize the updated token set in canonical sorted order with a trailing newline",
+    "Atomically replace the target allowlist file"
+  ],
+  "data_model": {
+    "token": "String without whitespace, matching the validation policy",
+    "file_format": "Text file, one token per line; lines beginning with '#' are treated as comments"
+  },
+  "files": [
+    "agent/repair/allowlist_recovery.py",
+    "agent/tests/test_allowlist_recovery.py"
+  ],
+  "security_considerations": [
+    "Default validator restricts tokens to a conservative character set and maximum length to mitigate injection or path traversal via token values",
+    "Backups are created via atomic writes to avoid race conditions and ensure integrity",
+    "No external network or environment access is performed; all operations are local and explicit",
+    "Deterministic serialization minimizes unpredictable side effects and simplifies audit/review"
+  ],
+  "determinism": {
+    "ordering": "Tokens are always sorted lexicographically before writing",
+    "timestamps": "Tests can supply explicit timestamps; otherwise a UTC timestamp is generated at runtime",
+    "idempotency": "Repeated recovery with identical events results in no file changes"
+  },
+  "extensibility": {
+    "custom_validator": "Callers can inject domain-specific validation logic",
+    "parsers": "_extract_candidates can be extended to support additional event shapes"
+  }
+}
