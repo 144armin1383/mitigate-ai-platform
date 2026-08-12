@@ -1,0 +1,48 @@
+{
+  "mission_id": "ruflo-retry-policy-foundation-20260812181939",
+  "architecture_source": "docs/technology/evaluations/ruflo/3.37.0-deferred-capability-review.json",
+  "components_created": [
+    "agent/resilience/retry_budget.py",
+    "agent/resilience/retry_classification.py",
+    "agent/observability/retry_metrics.py"
+  ],
+  "existing_components_reused": [
+    "agent/resilience/capability_kernel.py",
+    "existing CircuitBreaker",
+    "existing retry/backoff behavior",
+    "agent/runtime/background_worker.py",
+    "agent/runtime/mission_queue.py",
+    "provider retry behavior",
+    "durable checkpointing",
+    "FlowSpec v1",
+    "idempotent execution",
+    "existing observability architecture",
+    "existing unittest conventions"
+  ],
+  "production_wiring_performed": false,
+  "tests_added": [
+    "agent/tests/test_retry_budget.py",
+    "agent/tests/test_retry_classification.py",
+    "agent/tests/test_retry_metrics.py"
+  ],
+  "compatibility_validation": {
+    "python_version": "3.12",
+    "provider_independence": true,
+    "no_new_dependencies": true,
+    "no_production_wiring_changes": true,
+    "unittest_safe": true
+  },
+  "risks_remaining": [
+    "Integration mapping from provider exceptions to RetryClassification may require small adapters.",
+    "Ensuring exact attempt numbering parity with existing retry engines during integration.",
+    "Coordinating RetryBudget with MissionQueue counters without duplication during wiring."
+  ],
+  "phase_b2_integration_required": true,
+  "recommended_phase_b2_files": [
+    "agent/resilience/capability_kernel.py",
+    "agent/runtime/background_worker.py",
+    "agent/runtime/mission_queue.py"
+  ],
+  "external_runtime_dependency": null,
+  "provider_independence_preserved": true
+}
