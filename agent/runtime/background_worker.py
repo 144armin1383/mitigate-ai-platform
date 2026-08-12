@@ -12,6 +12,9 @@ from typing import Any, Dict, Iterable, List, Optional, Protocol, Union
 from agent.runtime.production_execution_reporter import (
     ProductionExecutionReporter,
 )
+from agent.runtime.checkpoint_store import (
+    DurableCheckpointStore,
+)
 
 
 # Protocols for dependency injection
@@ -104,6 +107,8 @@ class BackgroundWorker:
         heartbeat_path: Optional[str] = None,
         execution_reporter: Optional[Any] = None,
         lifecycle_hook: Optional[Any] = None,
+        checkpoint_store: Optional[Any] = None,
+        checkpoint_project_id: Optional[str] = None,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be > 0")
@@ -119,6 +124,21 @@ class BackgroundWorker:
         self.heartbeat_path: Optional[str] = heartbeat_path
         self.execution_reporter: Optional[Any] = execution_reporter
         self.lifecycle_hook: Optional[Any] = lifecycle_hook
+        self.checkpoint_store: Optional[Any] = checkpoint_store
+        self.checkpoint_project_id: Optional[str] = (
+            str(checkpoint_project_id).strip()
+            if checkpoint_project_id is not None
+            else None
+        )
+
+        if (
+            self.checkpoint_store is not None
+            and not self.checkpoint_project_id
+        ):
+            raise ValueError(
+                "checkpoint_project_id is required "
+                "when checkpoint_store is configured"
+            )
 
         self._shutdown_requested: bool = False
         self._shutdown_event_emitted: bool = False
@@ -202,6 +222,135 @@ class BackgroundWorker:
         for mission_id in recovered:
             self._emit("recovered", mission_id=mission_id)
 
+    @staticmethod
+    def _checkpoint_execution_id(
+        mission: Dict[str, Any],
+    ) -> str:
+        mission_id = str(
+            mission.get("id") or ""
+        ).strip()
+
+        if not mission_id:
+            raise ValueError(
+                "checkpoint mission id is required"
+            )
+
+        attempts_done = int(
+            mission.get(
+                "attempts_done",
+                0,
+            )
+        )
+
+        if attempts_done < 0:
+            raise ValueError(
+                "checkpoint attempts_done must be non-negative"
+            )
+
+        return (
+            f"runtime-{mission_id}-"
+            f"attempt-{attempts_done}"
+        )
+
+    def _save_checkpoint(
+        self,
+        *,
+        mission: Dict[str, Any],
+        sequence: int,
+        phase: str,
+        controller_status: Optional[str] = None,
+        queue_state: Optional[str] = None,
+    ) -> None:
+        """
+        Persist one worker lifecycle checkpoint.
+
+        Checkpoint persistence is intentionally fail-soft:
+        a checkpoint storage problem must not create a second
+        mission execution authority or corrupt queue semantics.
+        """
+
+        if self.checkpoint_store is None:
+            return
+
+        try:
+            mission_id = str(
+                mission.get("id") or ""
+            ).strip()
+
+            attempts_done = int(
+                mission.get(
+                    "attempts_done",
+                    0,
+                )
+            )
+
+            max_retries = int(
+                mission.get(
+                    "max_retries",
+                    0,
+                )
+            )
+
+            state: Dict[str, Any] = {
+                "phase": str(phase),
+                "mission_id": mission_id,
+                "attempts_done": attempts_done,
+                "max_retries": max_retries,
+            }
+
+            if controller_status is not None:
+                state["controller_status"] = str(
+                    controller_status
+                )
+
+            if queue_state is not None:
+                state["queue_state"] = str(
+                    queue_state
+                )
+
+            self.checkpoint_store.save(
+                project_id=str(
+                    self.checkpoint_project_id
+                ),
+                execution_id=(
+                    self._checkpoint_execution_id(
+                        mission
+                    )
+                ),
+                step_id="mission_execution",
+                sequence=int(sequence),
+                state=state,
+                metadata={
+                    "worker_id": self.worker_id,
+                    "checkpoint_schema_version": 1,
+                },
+            )
+
+            self._emit(
+                "checkpoint_saved",
+                mission_id=mission_id,
+                checkpoint_sequence=int(
+                    sequence
+                ),
+                checkpoint_phase=str(
+                    phase
+                ),
+            )
+
+        except Exception:
+            self._emit(
+                "checkpoint_failed",
+                mission_id=str(
+                    mission.get("id") or ""
+                ),
+                checkpoint_sequence=int(
+                    sequence
+                ),
+                checkpoint_phase=str(
+                    phase
+                ),
+            )
+
     def _should_stop(self) -> bool:
         with self._lock:
             return self._shutdown_requested
@@ -248,6 +397,20 @@ class BackgroundWorker:
             # Emit claimed event upon successful exclusive claim
             self._emit("claimed", mission_id=mission_id)
 
+            self._save_checkpoint(
+                mission=mission,
+                sequence=0,
+                phase="claimed",
+                queue_state="running",
+            )
+
+            self._save_checkpoint(
+                mission=mission,
+                sequence=1,
+                phase="controller_started",
+                queue_state="running",
+            )
+
             # Execute via controller
             result = self._controller.execute(mission)
             status: str
@@ -256,10 +419,26 @@ class BackgroundWorker:
             else:
                 status = str(result)
 
+            self._save_checkpoint(
+                mission=mission,
+                sequence=2,
+                phase="controller_finished",
+                controller_status=status,
+                queue_state="running",
+            )
+
             # Map controller status to queue state transitions
             if status == "success":
                 self._queue.complete(mission_id)
                 self._emit("completed", mission_id=mission_id)
+
+                self._save_checkpoint(
+                    mission=mission,
+                    sequence=3,
+                    phase="queue_transition",
+                    controller_status=status,
+                    queue_state="completed",
+                )
 
                 if (
                     self.execution_reporter is not None
@@ -320,11 +499,50 @@ class BackgroundWorker:
                 # otherwise running -> failed.
                 self._queue.fail(mission_id)
                 self._emit("retrying", mission_id=mission_id)
+
+                attempts_done = int(
+                    mission.get(
+                        "attempts_done",
+                        0,
+                    )
+                )
+
+                max_retries = int(
+                    mission.get(
+                        "max_retries",
+                        0,
+                    )
+                )
+
+                queue_state = (
+                    "retrying"
+                    if attempts_done + 1
+                    <= max_retries
+                    else "failed"
+                )
+
+                self._save_checkpoint(
+                    mission=mission,
+                    sequence=3,
+                    phase="queue_transition",
+                    controller_status=status,
+                    queue_state=queue_state,
+                )
+
             elif status == "exhausted":
                 # Controller-level retries are exhausted. Queue transition still
                 # goes through fail() so attempt accounting remains centralized.
                 self._queue.fail(mission_id)
                 self._emit("failed", mission_id=mission_id)
+
+                self._save_checkpoint(
+                    mission=mission,
+                    sequence=3,
+                    phase="queue_transition",
+                    controller_status=status,
+                    queue_state="failed",
+                )
+
             elif status == "blocked":
                 # Policy/security failure path
                 self._queue.block(mission_id)
@@ -342,6 +560,15 @@ class BackgroundWorker:
                     mission_id=mission_id,
                     reason=reason,
                 )
+
+                self._save_checkpoint(
+                    mission=mission,
+                    sequence=3,
+                    phase="queue_transition",
+                    controller_status=status,
+                    queue_state="blocked",
+                )
+
             else:
                 # Unknown controller output fails closed. Do not create an
                 # implicit retry path outside the established retry authority.
@@ -350,6 +577,14 @@ class BackgroundWorker:
                     "failed",
                     mission_id=mission_id,
                     reason="unknown_status",
+                )
+
+                self._save_checkpoint(
+                    mission=mission,
+                    sequence=3,
+                    phase="queue_transition",
+                    controller_status=status,
+                    queue_state="blocked",
                 )
 
             # In once mode, exit after processing a single claimed mission
@@ -420,6 +655,15 @@ class BackgroundWorker:
             dest="execution_report_dir",
             default=None,
             help="Optional directory for persisted production execution reports",
+        )
+        parser.add_argument(
+            "--checkpoint-dir",
+            dest="checkpoint_dir",
+            default=None,
+            help=(
+                "Optional directory for durable worker "
+                "execution checkpoints"
+            ),
         )
         parser.add_argument(
             "--project-id",
@@ -534,6 +778,19 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
             project_id=str(args.project_id),
         )
 
+    checkpoint_store = None
+
+    if args.checkpoint_dir is not None:
+        if not args.project_id:
+            raise SystemExit(
+                "project-id is required when "
+                "checkpoint-dir is configured"
+            )
+
+        checkpoint_store = DurableCheckpointStore(
+            storage_dir=args.checkpoint_dir,
+        )
+
     lifecycle_hook = None
 
     if (
@@ -587,6 +844,12 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
         heartbeat_path=args.heartbeat_path,
         execution_reporter=reporter,
         lifecycle_hook=lifecycle_hook,
+        checkpoint_store=checkpoint_store,
+        checkpoint_project_id=(
+            str(args.project_id)
+            if checkpoint_store is not None
+            else None
+        ),
     )
 
     worker.run()
