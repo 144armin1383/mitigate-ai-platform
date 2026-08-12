@@ -31,9 +31,9 @@ class TestRetryExecutionAdapter(unittest.TestCase):
         self.assertEqual(event["execution"]["attempt"], 1)
         self.assertEqual(event["retry"]["authority"], "MissionQueue")
         self.assertEqual(event["retry"]["classification"]["kind"], "retryable")
-        self.assertTrue(event["retry"]["classification"]["retryable"]) 
+        self.assertTrue(event["retry"]["classification"]["retryable"])
         self.assertIn("budget", event["retry"])
-        self.assertTrue(event["retry"]["budget"]["eligible"]) 
+        self.assertTrue(event["retry"]["budget"]["eligible"])
         self.assertEqual(event["retry"]["budget"]["remaining"], 3)
         self.assertEqual(event["retry"]["budget"]["limit"], 5)
         self.assertEqual(event["retry"]["budget"]["source"], "RetryBudgetQueueAdapter")
@@ -55,7 +55,7 @@ class TestRetryExecutionAdapter(unittest.TestCase):
             classification_result=classification,
         )
         self.assertEqual(event["retry"]["classification"]["kind"], "non_retryable")
-        self.assertFalse(event["retry"]["classification"]["retryable"]) 
+        self.assertFalse(event["retry"]["classification"]["retryable"])
         self.assertNotIn("attempt", event["execution"])  # attempt omitted when None
 
     def test_exhausted_classification_projection(self):
@@ -68,8 +68,8 @@ class TestRetryExecutionAdapter(unittest.TestCase):
             retry_budget_projection={"eligible": False, "remaining": 0, "limit": 5, "exhausted": True},
         )
         self.assertEqual(event["retry"]["classification"]["kind"], "exhausted")
-        self.assertFalse(event["retry"]["classification"]["retryable"]) 
-        self.assertTrue(event["retry"]["budget"]["exhausted"]) 
+        self.assertFalse(event["retry"]["classification"]["retryable"])
+        self.assertTrue(event["retry"]["budget"]["exhausted"])
 
     def test_cancelled_classification_projection(self):
         classification = {"cancelled": True}
@@ -80,7 +80,7 @@ class TestRetryExecutionAdapter(unittest.TestCase):
             classification_result=classification,
         )
         self.assertEqual(event["retry"]["classification"]["kind"], "cancelled")
-        self.assertFalse(event["retry"]["classification"]["retryable"]) 
+        self.assertFalse(event["retry"]["classification"]["retryable"])
 
     def test_deadline_exceeded_classification_projection(self):
         classification = {"deadline_exceeded": True}
@@ -91,7 +91,7 @@ class TestRetryExecutionAdapter(unittest.TestCase):
             classification_result=classification,
         )
         self.assertEqual(event["retry"]["classification"]["kind"], "deadline_exceeded")
-        self.assertFalse(event["retry"]["classification"]["retryable"]) 
+        self.assertFalse(event["retry"]["classification"]["retryable"])
 
     def test_deterministic_output_and_no_input_mutation(self):
         classification = {"kind": "retryable", "reason": "transient"}
@@ -169,8 +169,8 @@ class TestRetryExecutionAdapter(unittest.TestCase):
             retry_budget_projection={"eligible": True, "remaining": 2, "limit": 3},
         )
         self.assertEqual(event["retry"]["authority"], "MissionQueue")
-        self.assertTrue(event["integration"]["retry_classification_integrated"]) 
-        self.assertTrue(event["integration"]["retry_budget_projection_integrated"]) 
+        self.assertTrue(event["integration"]["retry_classification_integrated"])
+        self.assertTrue(event["integration"]["retry_budget_projection_integrated"])
 
     def test_no_sleep_no_retry_loop_no_network(self):
         classification = {"kind": "retryable"}
