@@ -196,6 +196,135 @@ class NativeAssimilationMissionBridgeTests(
             ]["technology"],
         )
 
+    def test_preview_is_side_effect_free(
+        self,
+    ):
+        before = self.registry.get(
+            "ruflo"
+        )
+
+        before_state = before.state
+        before_evaluation_state = (
+            before.evaluation_state
+        )
+        before_assimilation_state = (
+            before.assimilation_state
+        )
+        before_metadata = dict(
+            before.metadata
+        )
+        before_adopted = list(
+            before.adopted_capabilities
+        )
+
+        missions = self.bridge.preview(
+            self._request()
+        )
+
+        after = self.registry.get(
+            "ruflo"
+        )
+
+        self.assertEqual(
+            1,
+            len(missions),
+        )
+
+        self.assertEqual(
+            "agent_orchestration",
+            missions[0]["step_id"],
+        )
+
+        self.assertEqual(
+            before_state,
+            after.state,
+        )
+
+        self.assertEqual(
+            before_evaluation_state,
+            after.evaluation_state,
+        )
+
+        self.assertEqual(
+            before_assimilation_state,
+            after.assimilation_state,
+        )
+
+        self.assertEqual(
+            before_metadata,
+            after.metadata,
+        )
+
+        self.assertEqual(
+            before_adopted,
+            after.adopted_capabilities,
+        )
+
+        self.assertEqual(
+            [],
+            self.queue.calls,
+        )
+
+    def test_preview_is_deterministic(
+        self,
+    ):
+        request = self._request(
+            capabilities=[
+                "workflow_coordination",
+                "agent_orchestration",
+                "workflow_coordination",
+            ]
+        )
+
+        first = self.bridge.preview(
+            request
+        )
+
+        second = self.bridge.preview(
+            request
+        )
+
+        self.assertEqual(
+            [
+                mission["step_id"]
+                for mission in first
+            ],
+            [
+                "agent_orchestration",
+                "workflow_coordination",
+            ],
+        )
+
+        self.assertEqual(
+            [
+                mission["mission_id"]
+                for mission in first
+            ],
+            [
+                mission["mission_id"]
+                for mission in second
+            ],
+        )
+
+        self.assertEqual(
+            [],
+            self.queue.calls,
+        )
+
+        record = self.registry.get(
+            "ruflo"
+        )
+
+        self.assertEqual(
+            AssimilationState.CANDIDATE,
+            record.assimilation_state,
+        )
+
+        self.assertEqual(
+            TechnologyState.EVALUATING,
+            record.state,
+        )
+
     def test_plan_updates_registry(
         self,
     ):

@@ -83,6 +83,22 @@ class NativeAssimilationMissionBridge:
 
         return missions
 
+    def preview(
+        self,
+        request: NativeAssimilationRequest,
+    ) -> list[dict[str, Any]]:
+        """
+        Build the deterministic native-assimilation mission plan
+        without mutating registry state or enqueueing missions.
+
+        Human review and planning tools must use this boundary when
+        inspecting proposed native replacements before authorization.
+        """
+
+        return self.create_missions(
+            request
+        )
+
     def plan(
         self,
         request: NativeAssimilationRequest,
