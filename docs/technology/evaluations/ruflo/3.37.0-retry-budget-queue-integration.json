@@ -1,0 +1,21 @@
+{
+  "mission_id": "ruflo-retry-budget-queue-integration-v3-20260812190541",
+  "integration_scope": "Resilience layer adapter projecting MissionQueue retry fields into RetryBudget semantics without modifying core runtime or persistence.",
+  "adapter_created": true,
+  "adapter_path": "agent/resilience/retry_budget_queue_adapter.py",
+  "mission_queue_modified": false,
+  "retry_budget_modified": false,
+  "persistence_schema_changed": false,
+  "migration_required": false,
+  "retry_state_authority": "MissionQueue",
+  "existing_retry_semantics_preserved": true,
+  "core_path_guard_preserved": true,
+  "tests_added": [
+    "agent/tests/test_retry_budget_queue_adapter.py"
+  ],
+  "full_test_result": "All unit tests passed locally for retry budget, mission queue, and adapter suites.",
+  "production_runtime_data_changed": false,
+  "external_runtime_dependency": false,
+  "provider_independence_preserved": true,
+  "remaining_integration_work": "Phase B2.2 requires integrating BackgroundWorker, RetryClassification, and RetryMetrics using an approved core-safe mechanism without modifying CORE_PATH_LOCKED paths."
+}
