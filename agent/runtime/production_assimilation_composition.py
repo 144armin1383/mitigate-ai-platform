@@ -10,11 +10,17 @@ from agent.resilience.replacement_mission_bridge import (
 from agent.runtime.assimilation_lifecycle_hook import (
     RuntimeAssimilationLifecycleHook,
 )
+from agent.runtime.production_lifecycle_dispatcher import (
+    ProductionLifecycleDispatcher,
+)
 from agent.technology.assimilation_mission_bridge import (
     NativeAssimilationMissionBridge,
 )
 from agent.technology.assimilation_reconciler import (
     AssimilationLifecycleReconciler,
+)
+from agent.technology.evaluation_result_reconciler import (
+    TechnologyEvaluationResultReconciler,
 )
 from agent.technology.registry import (
     TechnologyRegistry,
@@ -34,7 +40,9 @@ class ProductionAssimilationComposition:
     replacement_bridge: NativeReplacementMissionBridge
     assimilation_bridge: NativeAssimilationMissionBridge
     reconciler: AssimilationLifecycleReconciler
-    lifecycle_hook: RuntimeAssimilationLifecycleHook
+    evaluation_reconciler: TechnologyEvaluationResultReconciler
+    assimilation_hook: RuntimeAssimilationLifecycleHook
+    lifecycle_hook: ProductionLifecycleDispatcher
 
 
 def build_production_assimilation_composition(
@@ -106,9 +114,29 @@ def build_production_assimilation_composition(
         )
     )
 
-    lifecycle_hook = (
+    assimilation_hook = (
         RuntimeAssimilationLifecycleHook(
             reconciler=reconciler,
+        )
+    )
+
+    evaluation_reconciler = (
+        TechnologyEvaluationResultReconciler(
+            registry=registry,
+            repository_root=(
+                Path(__file__).resolve().parents[2]
+            ),
+        )
+    )
+
+    lifecycle_hook = (
+        ProductionLifecycleDispatcher(
+            evaluation_reconciler=(
+                evaluation_reconciler
+            ),
+            assimilation_hook=(
+                assimilation_hook
+            ),
         )
     )
 
@@ -117,6 +145,10 @@ def build_production_assimilation_composition(
         replacement_bridge=replacement_bridge,
         assimilation_bridge=assimilation_bridge,
         reconciler=reconciler,
+        evaluation_reconciler=(
+            evaluation_reconciler
+        ),
+        assimilation_hook=assimilation_hook,
         lifecycle_hook=lifecycle_hook,
     )
 

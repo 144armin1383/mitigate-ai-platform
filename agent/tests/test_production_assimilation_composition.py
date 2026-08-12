@@ -66,8 +66,15 @@ class ProductionAssimilationCompositionTests(
             )
 
             self.assertIsInstance(
-                composition.lifecycle_hook,
+                composition.assimilation_hook,
                 RuntimeAssimilationLifecycleHook,
+            )
+
+            self.assertEqual(
+                type(
+                    composition.lifecycle_hook
+                ).__name__,
+                "ProductionLifecycleDispatcher",
             )
 
             self.assertIsNotNone(
@@ -197,9 +204,9 @@ class ProductionAssimilationCompositionTests(
                 )
             )
 
-            self.assertIsInstance(
-                hook,
-                RuntimeAssimilationLifecycleHook,
+            self.assertEqual(
+                type(hook).__name__,
+                "ProductionLifecycleDispatcher",
             )
 
     def test_external_runtime_not_required(
@@ -226,3 +233,53 @@ class ProductionAssimilationCompositionTests(
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProductionEvaluationLifecycleCompositionTests(
+    unittest.TestCase
+):
+
+    def test_composition_exposes_evaluation_reconciler_and_dispatcher(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            queue_coordinator = FakeQueueCoordinator()
+            report_lookup = FakeReportLookup()
+
+            composition = (
+                build_production_assimilation_composition(
+                    registry_path=(
+                        root
+                        / "registry.json"
+                    ),
+                    queue_coordinator=(
+                        queue_coordinator
+                    ),
+                    queue_reference="missions",
+                    report_lookup=report_lookup,
+                )
+            )
+
+            self.assertEqual(
+                type(
+                    composition
+                    .evaluation_reconciler
+                ).__name__,
+                "TechnologyEvaluationResultReconciler",
+            )
+
+            self.assertEqual(
+                type(
+                    composition.lifecycle_hook
+                ).__name__,
+                "ProductionLifecycleDispatcher",
+            )
+
+            self.assertEqual(
+                type(
+                    composition.assimilation_hook
+                ).__name__,
+                "RuntimeAssimilationLifecycleHook",
+            )
