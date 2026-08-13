@@ -1,6 +1,6 @@
 services:
   agent-canvas:
-    image: ghcr.io/openhands/agent-canvas:${MITIGATE_AGENT_CANVAS_VERSION:-1.7.0}
+    image: ghcr.io/openhands/agent-canvas:${MITIGATE_AGENT_CANVAS_VERSION:-1.6.1}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${MITIGATE_AGENT_CANVAS_PORT:-8000}:8000"
