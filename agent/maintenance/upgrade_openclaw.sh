@@ -2,14 +2,9 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-ROOT="${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}"
 RUNTIME_ROOT="${MITIGATE_EXTERNAL_RUNTIME_ROOT:-/srv/mitigate/external-runtimes}"
 CURRENT="$RUNTIME_ROOT/npm"
 TARGET="${1:-latest}"
-
-log() {
-    printf '\n[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
-}
 
 die() {
     echo "ERROR: $*" >&2
@@ -17,21 +12,27 @@ die() {
 }
 
 [[ "$EUID" -eq 0 ]] || die "Run with sudo/root."
+[[ -d "$CURRENT" ]] || die "Runtime npm directory missing."
 
 if [[ "$TARGET" == "latest" ]]; then
     TARGET="$(npm view openclaw version)"
 fi
 
-CURRENT_VERSION="missing"
+OPENCLAW_BIN="$CURRENT/node_modules/.bin/openclaw"
+RUFLO_BIN="$CURRENT/node_modules/.bin/ruflo"
 
-if [[ -x "$CURRENT/node_modules/.bin/openclaw" ]]; then
-    CURRENT_VERSION="$(
-        "$CURRENT/node_modules/.bin/openclaw" --version \
-        | sed -E 's/^OpenClaw ([^ ]+).*/\1/'
-    )"
-fi
+CURRENT_VERSION="$(
+    "$OPENCLAW_BIN" --version |
+    sed -E 's/^OpenClaw ([^ ]+).*/\1/'
+)"
 
-log "OpenClaw current=$CURRENT_VERSION target=$TARGET"
+RUFLO_VERSION="$(
+    "$RUFLO_BIN" --version |
+    sed -E 's/^ruflo v//'
+)"
+
+echo "OPENCLAW_CURRENT=$CURRENT_VERSION"
+echo "OPENCLAW_TARGET=$TARGET"
 
 if [[ "$CURRENT_VERSION" == "$TARGET" ]]; then
     echo "OPENCLAW_ALREADY_CURRENT=yes"
@@ -39,43 +40,81 @@ if [[ "$CURRENT_VERSION" == "$TARGET" ]]; then
 fi
 
 CANDIDATE="$RUNTIME_ROOT/npm.openclaw-candidate.$$"
+BACKUP="$RUNTIME_ROOT/npm.openclaw-rollback.$$"
+
+OWNER_UID="$(stat -c '%u' "$CURRENT")"
+OWNER_GID="$(stat -c '%g' "$CURRENT")"
+
+cleanup_candidate() {
+    rm -rf "$CANDIDATE"
+}
+
+trap cleanup_candidate EXIT
 
 mkdir -p "$CANDIDATE"
 
-cp "$CURRENT/package.json" "$CANDIDATE/package.json"
+npm init --prefix "$CANDIDATE" -y >/dev/null 2>&1
 
 npm install \
+    --save-exact \
     --prefix "$CANDIDATE" \
     "openclaw@$TARGET" \
-    "ruflo@$(
-        "$CURRENT/node_modules/.bin/ruflo" --version \
-        | sed -E 's/^ruflo v//'
-    )"
+    "ruflo@$RUFLO_VERSION"
 
 "$CANDIDATE/node_modules/.bin/openclaw" --version
 "$CANDIDATE/node_modules/.bin/ruflo" --version
 
-rm -rf "$CURRENT/node_modules"
-mv "$CANDIDATE/node_modules" "$CURRENT/node_modules"
+TEST_VERSION="$(
+    "$CANDIDATE/node_modules/.bin/openclaw" --version |
+    sed -E 's/^OpenClaw ([^ ]+).*/\1/'
+)"
 
-rm -f "$CURRENT/package-lock.json"
-[[ -f "$CANDIDATE/package-lock.json" ]] \
-    && mv "$CANDIDATE/package-lock.json" "$CURRENT/package-lock.json"
+[[ "$TEST_VERSION" == "$TARGET" ]] ||
+    die "OpenClaw candidate verification failed."
 
-rm -rf "$CANDIDATE"
+chown -R "$OWNER_UID:$OWNER_GID" "$CANDIDATE"
+
+mv "$CURRENT" "$BACKUP"
+mv "$CANDIDATE" "$CURRENT"
+
+rollback() {
+    local code=$?
+
+    if [[ "$code" -eq 0 ]]; then
+        return
+    fi
+
+    trap - EXIT
+
+    echo "OPENCLAW_ROLLBACK=yes"
+
+    rm -rf "$CURRENT"
+    mv "$BACKUP" "$CURRENT"
+
+    systemctl restart mitigate-ai-worker.service || true
+
+    exit "$code"
+}
+
+trap rollback EXIT
 
 systemctl restart mitigate-ai-worker.service
 sleep 3
 
-[[ "$(systemctl is-active mitigate-ai-worker.service)" == "active" ]] \
-    || die "Worker failed after OpenClaw upgrade."
+[[ "$(systemctl is-active mitigate-ai-worker.service)" == "active" ]] ||
+    die "Worker failed after OpenClaw upgrade."
 
-VERSION="$(
-    "$CURRENT/node_modules/.bin/openclaw" --version \
-    | sed -E 's/^OpenClaw ([^ ]+).*/\1/'
+FINAL_VERSION="$(
+    "$CURRENT/node_modules/.bin/openclaw" --version |
+    sed -E 's/^OpenClaw ([^ ]+).*/\1/'
 )"
 
-[[ "$VERSION" == "$TARGET" ]] || die "OpenClaw version verification failed."
+[[ "$FINAL_VERSION" == "$TARGET" ]] ||
+    die "OpenClaw final verification failed."
+
+rm -rf "$BACKUP"
+
+trap - EXIT
 
 echo "OPENCLAW_UPGRADE=OK"
 echo "OPENCLAW_VERSION=$TARGET"

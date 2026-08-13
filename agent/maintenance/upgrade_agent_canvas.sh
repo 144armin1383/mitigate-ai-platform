@@ -5,7 +5,8 @@ IFS=$'\n\t'
 ROOT="${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}"
 ENV_FILE="${MITIGATE_CANVAS_ENV:-/etc/mitigate-ai/agent-canvas.env}"
 COMPOSE_DIR="${MITIGATE_AGENT_CANVAS_COMPOSE_DIR:-$ROOT/agent/deploy/agent-canvas}"
-TARGET_VERSION="${1:-${MITIGATE_AGENT_CANVAS_TARGET_VERSION:-latest}}"
+REQUESTED_TARGET="${1:-${MITIGATE_AGENT_CANVAS_TARGET_VERSION:-latest}}"
+TARGET_VERSION="$REQUESTED_TARGET"
 MIN_FREE_GB="${MITIGATE_CANVAS_UPGRADE_MIN_FREE_GB:-12}"
 READY_URL="${MITIGATE_AGENT_CANVAS_READY_URL:-http://127.0.0.1:8000/ready}"
 
@@ -104,6 +105,38 @@ docker compose \
   --env-file "$ENV_FILE" \
   pull agent-canvas
 
+CURRENT_CONTAINER_ID="$(
+    docker compose \
+      --env-file "$ENV_FILE" \
+      ps -q agent-canvas 2>/dev/null || true
+)"
+
+CURRENT_IMAGE_ID=""
+
+if [[ -n "$CURRENT_CONTAINER_ID" ]]; then
+    CURRENT_IMAGE_ID="$(
+        docker inspect \
+          --format '{{.Image}}' \
+          "$CURRENT_CONTAINER_ID"
+    )"
+fi
+
+TARGET_IMAGE_ID="$(
+    docker image inspect \
+      "ghcr.io/openhands/agent-canvas:$TARGET_VERSION" \
+      --format '{{.Id}}'
+)"
+
+if [[ -n "$CURRENT_IMAGE_ID" && "$CURRENT_IMAGE_ID" == "$TARGET_IMAGE_ID" ]]; then
+    log "Agent Canvas already uses the latest target image"
+
+    trap - EXIT
+    rm -f "$BACKUP"
+
+    echo "AGENT_CANVAS_ALREADY_CURRENT=yes"
+    exit 0
+fi
+
 log "Starting target version"
 
 MITIGATE_AGENT_CANVAS_VERSION="$TARGET_VERSION" \
@@ -188,11 +221,34 @@ IMAGE="$(
       "$CONTAINER_ID"
 )"
 
+IMAGE_ID="$(
+    docker inspect \
+      --format '{{.Image}}' \
+      "$CONTAINER_ID"
+)"
+
+LABEL_VERSION="$(
+    docker image inspect \
+      "$IMAGE_ID" \
+      --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' \
+      2>/dev/null || true
+)"
+
+LABEL_VERSION="${LABEL_VERSION#v}"
+
+RESOLVED_VERSION="$TARGET_VERSION"
+
+if [[ "$REQUESTED_TARGET" == "latest" ]]; then
+    if [[ -z "$LABEL_VERSION" || "$LABEL_VERSION" == "<no value>" ]]; then
+        die "Latest Canvas image does not expose a stable version label."
+    fi
+
+    RESOLVED_VERSION="$LABEL_VERSION"
+fi
+
 log "Upgrade passed all checks"
 
-if [[ "$TARGET_VERSION" != "latest" ]]; then
-    set_env MITIGATE_AGENT_CANVAS_VERSION "$TARGET_VERSION"
-fi
+set_env MITIGATE_AGENT_CANVAS_VERSION "$RESOLVED_VERSION"
 
 trap - EXIT
 rm -f "$BACKUP"
@@ -202,7 +258,8 @@ echo "=================================================="
 echo "AGENT CANVAS UPGRADE SUCCESSFUL"
 echo "=================================================="
 echo "Previous: $CURRENT_VERSION"
-echo "Target:   $TARGET_VERSION"
+echo "Target:   $REQUESTED_TARGET"
+echo "Resolved: $RESOLVED_VERSION"
 echo "Image:    $IMAGE"
 echo "Ready:    yes"
 echo "LLM:      verified"

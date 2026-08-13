@@ -2,14 +2,9 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-ROOT="${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}"
 RUNTIME_ROOT="${MITIGATE_EXTERNAL_RUNTIME_ROOT:-/srv/mitigate/external-runtimes}"
 CURRENT="$RUNTIME_ROOT/npm"
 TARGET="${1:-latest}"
-
-log() {
-    printf '\n[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
-}
 
 die() {
     echo "ERROR: $*" >&2
@@ -17,21 +12,27 @@ die() {
 }
 
 [[ "$EUID" -eq 0 ]] || die "Run with sudo/root."
+[[ -d "$CURRENT" ]] || die "Runtime npm directory missing."
 
 if [[ "$TARGET" == "latest" ]]; then
     TARGET="$(npm view ruflo version)"
 fi
 
-CURRENT_VERSION="missing"
+OPENCLAW_BIN="$CURRENT/node_modules/.bin/openclaw"
+RUFLO_BIN="$CURRENT/node_modules/.bin/ruflo"
 
-if [[ -x "$CURRENT/node_modules/.bin/ruflo" ]]; then
-    CURRENT_VERSION="$(
-        "$CURRENT/node_modules/.bin/ruflo" --version \
-        | sed -E 's/^ruflo v//'
-    )"
-fi
+CURRENT_VERSION="$(
+    "$RUFLO_BIN" --version |
+    sed -E 's/^ruflo v//'
+)"
 
-log "Ruflo current=$CURRENT_VERSION target=$TARGET"
+OPENCLAW_VERSION="$(
+    "$OPENCLAW_BIN" --version |
+    sed -E 's/^OpenClaw ([^ ]+).*/\1/'
+)"
+
+echo "RUFLO_CURRENT=$CURRENT_VERSION"
+echo "RUFLO_TARGET=$TARGET"
 
 if [[ "$CURRENT_VERSION" == "$TARGET" ]]; then
     echo "RUFLO_ALREADY_CURRENT=yes"
@@ -39,15 +40,23 @@ if [[ "$CURRENT_VERSION" == "$TARGET" ]]; then
 fi
 
 CANDIDATE="$RUNTIME_ROOT/npm.ruflo-candidate.$$"
+BACKUP="$RUNTIME_ROOT/npm.ruflo-rollback.$$"
+
+OWNER_UID="$(stat -c '%u' "$CURRENT")"
+OWNER_GID="$(stat -c '%g' "$CURRENT")"
+
+cleanup_candidate() {
+    rm -rf "$CANDIDATE"
+}
+
+trap cleanup_candidate EXIT
 
 mkdir -p "$CANDIDATE"
 
-OPENCLAW_VERSION="$(
-    "$CURRENT/node_modules/.bin/openclaw" --version \
-    | sed -E 's/^OpenClaw ([^ ]+).*/\1/'
-)"
+npm init --prefix "$CANDIDATE" -y >/dev/null 2>&1
 
 npm install \
+    --save-exact \
     --prefix "$CANDIDATE" \
     "openclaw@$OPENCLAW_VERSION" \
     "ruflo@$TARGET"
@@ -55,27 +64,57 @@ npm install \
 "$CANDIDATE/node_modules/.bin/openclaw" --version
 "$CANDIDATE/node_modules/.bin/ruflo" --version
 
-rm -rf "$CURRENT/node_modules"
-mv "$CANDIDATE/node_modules" "$CURRENT/node_modules"
+TEST_VERSION="$(
+    "$CANDIDATE/node_modules/.bin/ruflo" --version |
+    sed -E 's/^ruflo v//'
+)"
 
-rm -f "$CURRENT/package-lock.json"
-[[ -f "$CANDIDATE/package-lock.json" ]] \
-    && mv "$CANDIDATE/package-lock.json" "$CURRENT/package-lock.json"
+[[ "$TEST_VERSION" == "$TARGET" ]] ||
+    die "Ruflo candidate verification failed."
 
-rm -rf "$CANDIDATE"
+chown -R "$OWNER_UID:$OWNER_GID" "$CANDIDATE"
+
+mv "$CURRENT" "$BACKUP"
+mv "$CANDIDATE" "$CURRENT"
+
+rollback() {
+    local code=$?
+
+    if [[ "$code" -eq 0 ]]; then
+        return
+    fi
+
+    trap - EXIT
+
+    echo "RUFLO_ROLLBACK=yes"
+
+    rm -rf "$CURRENT"
+    mv "$BACKUP" "$CURRENT"
+
+    systemctl restart mitigate-ai-worker.service || true
+
+    exit "$code"
+}
+
+trap rollback EXIT
 
 systemctl restart mitigate-ai-worker.service
 sleep 3
 
-[[ "$(systemctl is-active mitigate-ai-worker.service)" == "active" ]] \
-    || die "Worker failed after Ruflo upgrade."
+[[ "$(systemctl is-active mitigate-ai-worker.service)" == "active" ]] ||
+    die "Worker failed after Ruflo upgrade."
 
-VERSION="$(
-    "$CURRENT/node_modules/.bin/ruflo" --version \
-    | sed -E 's/^ruflo v//'
+FINAL_VERSION="$(
+    "$CURRENT/node_modules/.bin/ruflo" --version |
+    sed -E 's/^ruflo v//'
 )"
 
-[[ "$VERSION" == "$TARGET" ]] || die "Ruflo version verification failed."
+[[ "$FINAL_VERSION" == "$TARGET" ]] ||
+    die "Ruflo final verification failed."
+
+rm -rf "$BACKUP"
+
+trap - EXIT
 
 echo "RUFLO_UPGRADE=OK"
 echo "RUFLO_VERSION=$TARGET"
