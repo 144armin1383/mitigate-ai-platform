@@ -39,12 +39,14 @@ jobs:
             agent/execution/runtime_branch_publisher.py \
             agent/execution/workspace_manager.py \
             agent/execution/upstream_manager.py \
+            agent/operations/runtime_doctor.py \
             agent/runtime/runtime_consolidation_controller.py \
             agent/runtime/runtime_consolidation_worker.py
           python -m json.tool agent/config/external-runtimes.json >/dev/null
           bash -n agent/bootstrap/install_external_runtimes.sh
           bash -n agent/bootstrap/enable_runtime_consolidation.sh
           bash -n agent/bootstrap/disable_runtime_consolidation.sh
+          bash -n agent/bootstrap/deploy_verified_main.sh
 
       - name: Run consolidation contract tests
         run: |
@@ -56,6 +58,7 @@ jobs:
             agent.tests.test_runtime_consolidation_controller \
             agent.tests.test_external_runtime_adapters \
             agent.tests.test_upstream_manager \
+            agent.tests.test_runtime_doctor \
             -v
 
       - name: Update rolling GitHub backup
@@ -80,4 +83,5 @@ jobs:
             echo "- Commit: $GITHUB_SHA"
             echo "- Rolling branch: backup/rolling-main"
             echo "- Integrity tests: passed"
+            echo "- Deploy gate: origin/main must equal origin/backup/rolling-main"
           } >> "$GITHUB_STEP_SUMMARY"
