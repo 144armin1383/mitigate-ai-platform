@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "canonical_authority": "MITIGATE AI",
+    "automatic_production_upgrade": false,
+    "require_disposable_compatibility_test": true,
+    "require_rollback_version": true,
+    "prefer_public_stable_interfaces": true,
+    "avoid_upstream_forks": true
+  },
+  "components": [
+    {
+      "name": "openhands",
+      "repository": "OpenHands/software-agent-sdk",
+      "ecosystem": "python",
+      "package": "openhands-sdk",
+      "pinned_version": "1.24.0",
+      "role": "primary software-engineering execution provider",
+      "required": false,
+      "adoption": "active"
+    },
+    {
+      "name": "openclaw",
+      "repository": "openclaw/openclaw",
+      "ecosystem": "npm",
+      "package": "openclaw",
+      "pinned_version": "2026.7.1",
+      "role": "skills, tools, MCP, sessions and integration capability provider",
+      "required": false,
+      "adoption": "active-selective"
+    },
+    {
+      "name": "ruflo",
+      "repository": "ruvnet/ruflo",
+      "ecosystem": "npm",
+      "package": "ruflo",
+      "pinned_version": "3.10.2",
+      "role": "benchmark-gated multi-agent, swarm and memory provider",
+      "required": false,
+      "adoption": "benchmark-only"
+    }
+  ]
+}
