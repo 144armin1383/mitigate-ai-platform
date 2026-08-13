@@ -1,8 +1,8 @@
 [Unit]
 Description=MITIGATE AI Runtime MCP Server
-After=network-online.target mitigate-ai-runtime-gateway.service
+After=network-online.target mitigate-ai-runtime-gateway.service mitigate-ai-runtime-api.service
 Wants=network-online.target
-Requires=mitigate-ai-runtime-gateway.service
+Requires=mitigate-ai-runtime-gateway.service mitigate-ai-runtime-api.service
 
 [Service]
 Type=simple
@@ -14,6 +14,7 @@ WorkingDirectory=/srv/mitigate/mitigate-ai-platform
 EnvironmentFile=/etc/mitigate-ai/runtime.env
 
 Environment="MITIGATE_RUNTIME_GATEWAY_URL=http://127.0.0.1:8770"
+Environment="MITIGATE_AI_RUNTIME_BASE_URL=http://127.0.0.1:8765"
 Environment="MITIGATE_MCP_HOST=172.18.0.1"
 Environment="MITIGATE_MCP_PORT=8771"
 
