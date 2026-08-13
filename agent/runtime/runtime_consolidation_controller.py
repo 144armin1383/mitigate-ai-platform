@@ -22,6 +22,30 @@ from agent.execution.workspace_manager import DisposableWorkspaceManager
 from agent.runtime.production_mission_controller import ProductionMissionController
 
 
+AUTO_ROUTE_TASK_TYPES = frozenset(
+    {
+        "backend",
+        "frontend",
+        "fullstack",
+        "bugfix",
+        "maintenance",
+        "refactor",
+        "test",
+        "tests",
+    }
+)
+
+AUTO_ROUTE_DENIED_PATHS = (
+    ".github/workflows",
+    "agent/ai",
+    "agent/bootstrap",
+    "agent/config/external-runtimes.json",
+    "agent/execution",
+    "agent/policies",
+    "agent/runtime",
+)
+
+
 class _ExternalOpenHandsRunner:
     def __init__(self, *, repository_root: Path, python_binary: Path) -> None:
         self.repository_root = repository_root
@@ -72,10 +96,13 @@ class _ExternalOpenHandsRunner:
 
 
 class RuntimeConsolidationController:
-    """MITIGATE-owned controller that routes opted-in missions to external runtimes.
+    """MITIGATE-owned controller that routes safe missions to external runtimes.
 
-    Missions without an explicit runtime_execution block continue through the
-    existing ProductionMissionController unchanged.
+    Explicit ``runtime_execution`` metadata always wins. For ordinary, non-Core
+    software-engineering missions with a structured deliverable allowlist,
+    MITIGATE can automatically prefer OpenHands inside a disposable worktree.
+    Missions outside that bounded policy continue through the existing
+    ProductionMissionController unchanged.
     """
 
     def __init__(
@@ -104,15 +131,96 @@ class RuntimeConsolidationController:
     def execute(self, mission: Dict[str, Any]) -> Dict[str, Any]:
         mission_id = str(mission.get("id") or "").strip()
         context, content = self._mission_context(mission_id)
-        execution = context.get("runtime_execution") if isinstance(context, dict) else None
-        if not isinstance(execution, dict) or not bool(execution.get("enabled", False)):
+
+        explicit_execution = (
+            context.get("runtime_execution")
+            if isinstance(context, dict) and "runtime_execution" in context
+            else None
+        )
+
+        if isinstance(explicit_execution, dict):
+            if not bool(explicit_execution.get("enabled", False)):
+                return self.legacy.execute(mission)
+            execution = explicit_execution
+        elif explicit_execution is not None:
             return self.legacy.execute(mission)
+        else:
+            execution = self._automatic_runtime_execution(
+                content=content,
+                context=context,
+            )
+            if execution is None:
+                return self.legacy.execute(mission)
 
         request = self._execution_request(mission_id, content, context, execution)
         require = self._capabilities(execution.get("require", {}))
         preferred = self._preferred(execution.get("preferred", ()))
         result = self.router.execute(request, require=require, preferred=preferred)
         return self._normalize_result(result)
+
+    @classmethod
+    def _automatic_runtime_execution(
+        cls,
+        *,
+        content: str,
+        context: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        """Return a bounded default OpenHands policy for ordinary code missions.
+
+        Automatic routing is deliberately conservative:
+        - Core-maintenance missions never auto-route;
+        - task type must be explicitly allowlisted;
+        - a non-empty structured deliverable allowlist is mandatory;
+        - platform/runtime paths are denied by default;
+        - explicit runtime_execution metadata always takes precedence upstream.
+        """
+        if "CORE_MAINTENANCE_APPROVED" in content:
+            return None
+
+        task_type = cls._task_type(content)
+        if task_type not in AUTO_ROUTE_TASK_TYPES:
+            return None
+
+        deliverables = cls._string_tuple(context.get("deliverables", ()))
+        if not deliverables:
+            return None
+
+        objective = str(context.get("objective") or "").strip()
+        if not objective and not cls._heading_text(content, "Objective"):
+            return None
+
+        denied = tuple(
+            dict.fromkeys(
+                (*AUTO_ROUTE_DENIED_PATHS, *cls._string_tuple(context.get("denied_paths", ())))
+            )
+        )
+
+        return {
+            "enabled": True,
+            "preferred": ["openhands"],
+            "require": {
+                "coding": True,
+                "terminal": True,
+                "file_editing": True,
+                "tests": True,
+                "isolated_workspace": True,
+            },
+            "denied_paths": denied,
+            "metadata": {
+                "automatic_runtime_routing": True,
+            },
+        }
+
+    @staticmethod
+    def _task_type(content: str) -> str:
+        match = re.search(
+            r"^Task Type:\s*(.+?)\s*$",
+            content,
+            re.MULTILINE,
+        )
+        if not match:
+            return ""
+        return match.group(1).strip().lower().replace("-", "_")
 
     def _build_router(self) -> RuntimeRouter:
         npm_bin = self.external_runtime_root / "npm" / "node_modules" / ".bin"
@@ -161,7 +269,14 @@ class RuntimeConsolidationController:
     ) -> ExecutionRequest:
         objective = str(context.get("objective") or "").strip() or self._heading_text(content, "Objective")
         deliverables = self._string_tuple(context.get("deliverables", ()))
-        denied = self._string_tuple(context.get("denied_paths", ()))
+        denied = tuple(
+            dict.fromkeys(
+                (
+                    *self._string_tuple(execution.get("denied_paths", ())),
+                    *self._string_tuple(context.get("denied_paths", ())),
+                )
+            )
+        )
         criteria = self._string_tuple(context.get("acceptance_criteria", ()))
         metadata = dict(execution.get("metadata") or {})
         metadata.setdefault("openclaw_capability_task", bool(execution.get("openclaw_capability_task", False)))
