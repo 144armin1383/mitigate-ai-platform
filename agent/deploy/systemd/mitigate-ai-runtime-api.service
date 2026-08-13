@@ -12,6 +12,8 @@ Group=ubuntu
 WorkingDirectory=/srv/mitigate/mitigate-ai-platform
 
 EnvironmentFile=/etc/mitigate-ai/runtime.env
+Environment="OPENCLAW_HOME=/srv/mitigate/data/openclaw"
+Environment="OPENCLAW_STATE_DIR=/srv/mitigate/data/openclaw"
 
 ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.production_runtime_api
 
