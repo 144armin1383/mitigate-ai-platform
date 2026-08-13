@@ -34,7 +34,7 @@
       "repository": "ruvnet/ruflo",
       "ecosystem": "npm",
       "package": "ruflo",
-      "pinned_version": "3.10.2",
+      "pinned_version": "3.38.8",
       "role": "benchmark-gated multi-agent, swarm and memory provider",
       "required": false,
       "adoption": "benchmark-only"
