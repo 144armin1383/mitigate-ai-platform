@@ -6,6 +6,154 @@
 
   const API = '/mitigate-runtime/providers';
 
+  const MITIGATE_MCP_CONFIG = {
+    'mitigate-runtime': {
+      url: 'http://172.18.0.1:8771/mcp',
+      transport: 'streamable-http',
+      enabled: true
+    }
+  };
+
+  const nativeFetch = window.fetch.bind(window);
+
+  window.fetch = async function mitigateFetch(
+    input,
+    init = {}
+  ) {
+    try {
+      const isRequest =
+        typeof Request !== 'undefined' &&
+        input instanceof Request;
+
+      const url = isRequest
+        ? input.url
+        : String(input);
+
+      const method = String(
+        init.method ||
+        (isRequest ? input.method : 'GET')
+      ).toUpperCase();
+
+      const isConversationCreate =
+        method === 'POST' &&
+        /\/api\/conversations(?:\?|$)/.test(url);
+
+      if (isConversationCreate) {
+        let bodyText = '';
+
+        if (typeof init.body === 'string') {
+          bodyText = init.body;
+        } else if (isRequest) {
+          bodyText = await input.clone().text();
+        }
+
+        if (bodyText) {
+          const payload = JSON.parse(bodyText);
+
+          const settingsResponse = await nativeFetch(
+            '/api/settings',
+            {
+              method: 'GET',
+              headers: {
+                'X-Expose-Secrets': 'encrypted'
+              },
+              credentials: 'same-origin',
+              cache: 'no-store'
+            }
+          );
+
+          if (!settingsResponse.ok) {
+            throw new Error(
+              'Unable to obtain encrypted Agent settings'
+            );
+          }
+
+          const settings =
+            await settingsResponse.json();
+
+          const agentSettings = JSON.parse(
+            JSON.stringify(
+              settings.agent_settings || {}
+            )
+          );
+
+          delete agentSettings.schema_version;
+
+          agentSettings.mcp_config = {
+            ...(agentSettings.mcp_config || {}),
+            ...MITIGATE_MCP_CONFIG
+          };
+
+          /*
+           * Preserve any tool selection explicitly
+           * supplied by Agent Canvas.
+           */
+          if (
+            payload.agent &&
+            Array.isArray(payload.agent.tools)
+          ) {
+            agentSettings.tools =
+              payload.agent.tools;
+          }
+
+          payload.agent_settings =
+            agentSettings;
+
+          /*
+           * X-Expose-Secrets returns encrypted
+           * credentials, never plaintext.
+           */
+          payload.secrets_encrypted = true;
+
+          /*
+           * StartConversationRequest requires these
+           * launch modes to be mutually exclusive.
+           */
+          delete payload.agent;
+          delete payload.agent_profile_id;
+
+          const newBody =
+            JSON.stringify(payload);
+
+          if (isRequest) {
+            input = new Request(
+              input,
+              {
+                body: newBody
+              }
+            );
+
+            init = {};
+          } else {
+            init = {
+              ...init,
+              body: newBody
+            };
+          }
+
+          console.info(
+            '[MITIGATE] Runtime MCP injected ' +
+            'into new conversation'
+          );
+        }
+      }
+    } catch (error) {
+      /*
+       * Fail open: never break upstream Canvas
+       * if MITIGATE integration has a problem.
+       */
+      console.error(
+        '[MITIGATE] MCP conversation injection failed',
+        error
+      );
+    }
+
+    return nativeFetch(
+      input,
+      init
+    );
+  };
+
   const esc = (v) => String(v ?? '').replace(
     /[&<>"']/g,
     c => ({

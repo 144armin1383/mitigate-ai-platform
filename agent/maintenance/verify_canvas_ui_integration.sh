@@ -29,7 +29,7 @@ curl -fsS \
 test -f \
   /usr/local/share/mitigate-ai/mitigate-runtime-overlay.js
 
-nginx -t >/dev/null
+sudo nginx -t >/dev/null
 
 echo "CANVAS_UI_INTEGRATION=COMPATIBLE"
 echo "UPSTREAM_CANVAS_FILES_MODIFIED=no"
