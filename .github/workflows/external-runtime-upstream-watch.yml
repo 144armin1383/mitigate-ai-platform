@@ -1,0 +1,90 @@
+name: External Runtime Upstream Watch
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-upstreams:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compare tested pins with stable package releases
+        id: compare
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          manifest = json.loads(Path('agent/config/external-runtimes.json').read_text())
+
+          def get_json(url):
+              req = urllib.request.Request(url, headers={'User-Agent': 'mitigate-ai-upstream-watch/1'})
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)
+
+          latest = {
+              'openhands': get_json('https://pypi.org/pypi/openhands-sdk/json')['info']['version'],
+              'openclaw': get_json('https://registry.npmjs.org/openclaw/latest')['version'],
+              'ruflo': get_json('https://registry.npmjs.org/ruflo/latest')['version'],
+          }
+
+          rows = []
+          changed = False
+          for component in manifest['components']:
+              name = component['name']
+              pinned = str(component['pinned_version'])
+              current = str(latest[name])
+              update = pinned != current
+              changed = changed or update
+              rows.append((name, pinned, current, component.get('adoption', ''), update))
+
+          lines = [
+              '# External runtime upstream status',
+              '',
+              '| Runtime | Tested pin | Registry stable | Adoption | Action |',
+              '|---|---:|---:|---|---|',
+          ]
+          for name, pinned, current, adoption, update in rows:
+              action = 'Compatibility test required' if update else 'No change'
+              lines.append(f'| {name} | `{pinned}` | `{current}` | {adoption} | {action} |')
+
+          lines += [
+              '',
+              'MITIGATE policy: upstream releases are never promoted directly to production. ',
+              'A disposable compatibility run, tests, rollback point, and normal approval path are required first.',
+              '',
+              f'Checked from commit `{os.environ.get("GITHUB_SHA", "unknown")}`.',
+          ]
+          Path('/tmp/runtime-upstream-status.md').write_text('\n'.join(lines) + '\n')
+
+          output = os.environ['GITHUB_OUTPUT']
+          with open(output, 'a', encoding='utf-8') as handle:
+              handle.write(f'updates={str(changed).lower()}\n')
+          PY
+
+      - name: Publish check summary
+        run: cat /tmp/runtime-upstream-status.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or refresh update issue
+        if: steps.compare.outputs.updates == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="External runtime update available"
+          NUMBER="$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title --jq '.[] | select(.title == "External runtime update available") | .number' | head -n 1)"
+          if [ -n "$NUMBER" ]; then
+            gh issue edit "$NUMBER" --body-file /tmp/runtime-upstream-status.md
+          else
+            gh issue create --title "$TITLE" --body-file /tmp/runtime-upstream-status.md
+          fi
