@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from typing import Any, Mapping
@@ -14,11 +15,18 @@ from agent.execution.runtime_adapter import (
 )
 
 
+RUFLO_OPT_IN_ENV = "MITIGATE_ENABLE_RUFLO_BENCHMARK"
+
+
 class RufloRuntimeAdapter:
     """Benchmark-gated Ruflo provider.
 
     Ruflo is optional. It may provide swarm, memory and coordination value, but
     it cannot own MITIGATE mission state, policy, approvals or canonical memory.
+
+    Production CLI use is disabled by default. It requires both explicit
+    ``benchmark_mode`` metadata and ``MITIGATE_ENABLE_RUFLO_BENCHMARK=1``.
+    Injected runners remain available to tests and disposable benchmarks.
     """
 
     def __init__(self, *, runner: Any | None = None, binary: str = "ruflo") -> None:
@@ -38,9 +46,21 @@ class RufloRuntimeAdapter:
             remote_execution=True,
         )
 
+    @staticmethod
+    def _production_opted_in() -> bool:
+        return os.environ.get(RUFLO_OPT_IN_ENV, "").strip() == "1"
+
     def healthcheck(self) -> Mapping[str, Any]:
         if self._runner is not None:
             return {"available": True, "mode": "injected"}
+
+        if not self._production_opted_in():
+            return {
+                "available": False,
+                "mode": "cli",
+                "reason": "ruflo_default_disabled",
+                "opt_in_env": RUFLO_OPT_IN_ENV,
+            }
 
         binary = shutil.which(self._binary)
         if not binary:
@@ -67,6 +87,20 @@ class RufloRuntimeAdapter:
                 provider=self.name,
                 retryable=False,
                 reason="ruflo_is_benchmark_gated",
+            )
+
+        if self._runner is None and not self._production_opted_in():
+            return ExecutionResult(
+                status=RuntimeStatus.blocked,
+                provider=self.name,
+                retryable=False,
+                reason="ruflo_default_disabled",
+                evidence=ExecutionEvidence(
+                    provider_metadata={
+                        "runtime": "ruflo",
+                        "opt_in_env": RUFLO_OPT_IN_ENV,
+                    }
+                ),
             )
 
         try:
@@ -138,4 +172,4 @@ class RufloRuntimeAdapter:
         )
 
 
-__all__ = ["RufloRuntimeAdapter"]
+__all__ = ["RUFLO_OPT_IN_ENV", "RufloRuntimeAdapter"]
