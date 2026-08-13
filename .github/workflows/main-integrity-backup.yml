@@ -1,0 +1,83 @@
+name: Main Integrity and GitHub Backup
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: main-integrity-backup
+  cancel-in-progress: false
+
+jobs:
+  verify-and-backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate runtime core
+        run: |
+          python -m py_compile \
+            agent/execution/runtime_adapter.py \
+            agent/execution/openhands_adapter.py \
+            agent/execution/openclaw_adapter.py \
+            agent/execution/ruflo_adapter.py \
+            agent/execution/runtime_router.py \
+            agent/execution/runtime_branch_publisher.py \
+            agent/execution/workspace_manager.py \
+            agent/execution/upstream_manager.py \
+            agent/runtime/runtime_consolidation_controller.py \
+            agent/runtime/runtime_consolidation_worker.py
+          python -m json.tool agent/config/external-runtimes.json >/dev/null
+          bash -n agent/bootstrap/install_external_runtimes.sh
+          bash -n agent/bootstrap/enable_runtime_consolidation.sh
+          bash -n agent/bootstrap/disable_runtime_consolidation.sh
+
+      - name: Run consolidation contract tests
+        run: |
+          python -m unittest \
+            agent.tests.test_runtime_adapter \
+            agent.tests.test_openhands_adapter \
+            agent.tests.test_runtime_router \
+            agent.tests.test_runtime_branch_publisher \
+            agent.tests.test_runtime_consolidation_controller \
+            agent.tests.test_external_runtime_adapters \
+            agent.tests.test_upstream_manager \
+            -v
+
+      - name: Update rolling GitHub backup
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git push origin HEAD:refs/heads/backup/rolling-main --force
+
+          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
+          TAG="backup/main-${GITHUB_RUN_ID}-${SHORT_SHA}"
+          git tag -a "$TAG" -m "Verified backup of main at $GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      - name: Backup summary
+        run: |
+          {
+            echo "## MITIGATE verified GitHub backup"
+            echo
+            echo "- Source: main"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Rolling branch: backup/rolling-main"
+            echo "- Integrity tests: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
