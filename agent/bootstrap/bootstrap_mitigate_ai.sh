@@ -25,7 +25,7 @@ RUNTIME_ENV="$ENV_DIR/runtime.env"
 CANVAS_ENV="$ENV_DIR/agent-canvas.env"
 DATA_ROOT="${MITIGATE_DATA_ROOT:-/srv/mitigate/data}"
 EXTERNAL_ROOT="${MITIGATE_EXTERNAL_RUNTIME_ROOT:-/srv/mitigate/external-runtimes}"
-CANVAS_VERSION="${MITIGATE_AGENT_CANVAS_VERSION:-1.6.1}"
+CANVAS_VERSION="${MITIGATE_AGENT_CANVAS_VERSION:-1.12.0}"
 CANVAS_PORT="${MITIGATE_AGENT_CANVAS_PORT:-8000}"
 PANEL_PORT="${MITIGATE_AI_PANEL_PORT:-8766}"
 PROJECT_ID="${MITIGATE_AI_DEFAULT_PROJECT_ID:-mitigate-ai-platform}"
@@ -300,6 +300,24 @@ verify_stack() {
   printf 'For remote browser access use SSH local port forwarding; do not expose these ports directly.\n'
 }
 
+
+install_auto_update_management() {
+  log "Configuring host resources and automatic component updates"
+
+  "$ROOT/agent/maintenance/ensure_host_resources.sh"
+
+  install -m 0644 \
+    "$ROOT/agent/deploy/systemd/mitigate-ai-auto-update.service" \
+    /etc/systemd/system/mitigate-ai-auto-update.service
+
+  install -m 0644 \
+    "$ROOT/agent/deploy/systemd/mitigate-ai-auto-update.timer" \
+    /etc/systemd/system/mitigate-ai-auto-update.timer
+
+  systemctl daemon-reload
+  systemctl enable --now mitigate-ai-auto-update.timer
+}
+
 install_base_packages
 install_node22
 install_docker
@@ -310,4 +328,5 @@ install_runtime_services
 enable_consolidated_worker
 configure_canvas
 install_panel_service
+install_auto_update_management
 verify_stack

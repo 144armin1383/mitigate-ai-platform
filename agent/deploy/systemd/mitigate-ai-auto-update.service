@@ -1,0 +1,20 @@
+[Unit]
+Description=MITIGATE AI Managed Component Automatic Upgrade
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/srv/mitigate/mitigate-ai-platform/agent/config/managed-components.json
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/srv/mitigate/mitigate-ai-platform
+Environment=MITIGATE_ROOT=/srv/mitigate/mitigate-ai-platform
+Environment=MITIGATE_EXTERNAL_RUNTIME_ROOT=/srv/mitigate/external-runtimes
+ExecStart=/usr/bin/python3 /srv/mitigate/mitigate-ai-platform/agent/maintenance/upgrade_managed_components.py
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+StandardOutput=journal
+StandardError=journal

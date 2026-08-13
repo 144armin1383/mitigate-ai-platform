@@ -14,7 +14,7 @@
       "repository": "OpenHands/software-agent-sdk",
       "ecosystem": "python",
       "package": "openhands-sdk",
-      "pinned_version": "1.24.0",
+      "pinned_version": "1.42.1",
       "role": "primary software-engineering execution provider",
       "required": false,
       "adoption": "active"
@@ -24,7 +24,7 @@
       "repository": "openclaw/openclaw",
       "ecosystem": "npm",
       "package": "openclaw",
-      "pinned_version": "2026.7.1",
+      "pinned_version": "2026.7.1-2",
       "role": "skills, tools, MCP, sessions and integration capability provider",
       "required": false,
       "adoption": "active-selective"
@@ -34,7 +34,7 @@
       "repository": "ruvnet/ruflo",
       "ecosystem": "npm",
       "package": "ruflo",
-      "pinned_version": "3.38.8",
+      "pinned_version": "3.38.9",
       "role": "benchmark-gated multi-agent, swarm and memory provider",
       "required": false,
       "adoption": "benchmark-only"

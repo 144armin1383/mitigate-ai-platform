@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "automatic_updates": true,
+    "stable_only": true,
+    "require_health_check": true,
+    "require_rollback": true,
+    "minimum_free_disk_gb": 12,
+    "minimum_swap_gb_for_low_memory_hosts": 4
+  },
+  "components": [
+    {
+      "name": "agent-canvas",
+      "enabled": true,
+      "auto_update": true,
+      "updater": "agent/maintenance/upgrade_agent_canvas.sh"
+    },
+    {
+      "name": "openhands",
+      "enabled": true,
+      "auto_update": true,
+      "updater": "agent/maintenance/upgrade_openhands.sh"
+    },
+    {
+      "name": "openclaw",
+      "enabled": true,
+      "auto_update": true,
+      "updater": "agent/maintenance/upgrade_openclaw.sh"
+    },
+    {
+      "name": "ruflo",
+      "enabled": true,
+      "auto_update": true,
+      "updater": "agent/maintenance/upgrade_ruflo.sh"
+    }
+  ]
+}
