@@ -170,6 +170,15 @@ ln -sfn /etc/nginx/sites-available/mitigate-ai-access /etc/nginx/sites-enabled/m
 nginx -t
 systemctl reload nginx
 
+log "Installing MITIGATE Canvas UI integration"
+
+if [[ -f "${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}/agent/bootstrap/install_canvas_ui_integration.sh" ]]; then
+    MITIGATE_ROOT="${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}" \
+    MITIGATE_CANVAS_UPSTREAM="$CANVAS_UPSTREAM" \
+    bash "${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}/agent/bootstrap/install_canvas_ui_integration.sh" \
+      || log "WARNING: MITIGATE Canvas UI integration could not be enabled; official Canvas remains available."
+fi
+
 log "Installing automatic certificate reload hook"
 
 install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy

@@ -337,6 +337,17 @@ if [[ -n "$LABEL_VERSION" && "$LABEL_VERSION" != "<no value>" ]]; then
     RESOLVED_VERSION="$LABEL_VERSION"
 fi
 
+log "Checking MITIGATE Canvas UI integration compatibility"
+
+if [[ -f "$ROOT/agent/maintenance/verify_canvas_ui_integration.sh" ]]; then
+    if ! MITIGATE_ROOT="$ROOT" \
+      bash "$ROOT/agent/maintenance/verify_canvas_ui_integration.sh"; then
+        echo "MITIGATE_CANVAS_UI_INTEGRATION=DEGRADED"
+        echo "CANVAS_UPGRADE_REMAINS_ACTIVE=yes"
+        echo "UPSTREAM_CANVAS_FILES_MODIFIED=no"
+    fi
+fi
+
 log "Upgrade passed all checks"
 
 set_env MITIGATE_AGENT_CANVAS_VERSION "$RESOLVED_VERSION"
