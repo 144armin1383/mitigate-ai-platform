@@ -25,6 +25,7 @@ bash "$ROOT/agent/bootstrap/bootstrap_mitigate_ai.sh"
 MITIGATE_ROOT="$ROOT" \
 MITIGATE_OPENHANDS_LLM_MODEL="${MITIGATE_OPENHANDS_LLM_MODEL:-gpt-5.5}" \
 MITIGATE_OPENHANDS_LLM_AUTH_TYPE="${MITIGATE_OPENHANDS_LLM_AUTH_TYPE:-api_key}" \
+MITIGATE_OPENHANDS_LLM_PROFILE="${MITIGATE_OPENHANDS_LLM_PROFILE:-default}" \
 bash "$ROOT/agent/bootstrap/configure_openhands_llm.sh"
 
 if [[ "$ACCESS_MODE" != "local" ]]; then
@@ -46,3 +47,4 @@ fi
 printf '\nMITIGATE AI INSTALLATION COMPLETE\n'
 printf 'Access mode: %s\n' "$ACCESS_MODE"
 printf 'OpenHands LLM model: %s\n' "${MITIGATE_OPENHANDS_LLM_MODEL:-gpt-5.5}"
+printf 'OpenHands LLM profile: %s\n' "${MITIGATE_OPENHANDS_LLM_PROFILE:-default}"

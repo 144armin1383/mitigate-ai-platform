@@ -7,6 +7,7 @@ RUNTIME_ENV="${MITIGATE_RUNTIME_ENV:-/etc/mitigate-ai/runtime.env}"
 CANVAS_ENV="${MITIGATE_CANVAS_ENV:-/etc/mitigate-ai/agent-canvas.env}"
 LLM_MODEL="${MITIGATE_OPENHANDS_LLM_MODEL:-gpt-5.5}"
 LLM_AUTH_TYPE="${MITIGATE_OPENHANDS_LLM_AUTH_TYPE:-api_key}"
+LLM_PROFILE="${MITIGATE_OPENHANDS_LLM_PROFILE:-default}"
 COMPOSE_DIR="${MITIGATE_AGENT_CANVAS_COMPOSE_DIR:-$ROOT/agent/deploy/agent-canvas}"
 
 log() { printf '\n[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
@@ -16,6 +17,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ -f "$RUNTIME_ENV" ]] || die "Runtime env not found: $RUNTIME_ENV"
 [[ -f "$CANVAS_ENV" ]] || die "Canvas env not found: $CANVAS_ENV"
 [[ -d "$COMPOSE_DIR" ]] || die "Canvas compose directory not found: $COMPOSE_DIR"
+[[ "$LLM_PROFILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || die "Invalid OpenHands LLM profile name: $LLM_PROFILE"
 
 get_env_value() {
   local file="$1" key="$2"
@@ -41,54 +43,118 @@ done
 CONTAINER_ID="$(docker compose --env-file "$CANVAS_ENV" ps -q agent-canvas)"
 [[ -n "$CONTAINER_ID" ]] || die "Agent Canvas container not found"
 
-log "Persisting OpenHands LLM settings through the Agent Server API"
+log "Persisting and activating OpenHands LLM profile through the Agent Server API"
 docker exec -i \
   -e MITIGATE_LLM_KEY="$OPENAI_KEY" \
   -e MITIGATE_LLM_MODEL="$LLM_MODEL" \
   -e MITIGATE_LLM_AUTH_TYPE="$LLM_AUTH_TYPE" \
+  -e MITIGATE_LLM_PROFILE="$LLM_PROFILE" \
   "$CONTAINER_ID" \
-  python3 - <<'PY'
+  python3 - <<'PY_INNER'
 import json
 import os
 import urllib.request
 
-payload = {
-    "agent_settings_diff": {
-        "llm": {
-            "model": os.environ["MITIGATE_LLM_MODEL"],
-            "api_key": os.environ["MITIGATE_LLM_KEY"],
-            "auth_type": os.environ["MITIGATE_LLM_AUTH_TYPE"],
-        }
-    }
+base = "http://127.0.0.1:18000"
+
+profile = os.environ["MITIGATE_LLM_PROFILE"]
+model = os.environ["MITIGATE_LLM_MODEL"]
+auth_type = os.environ["MITIGATE_LLM_AUTH_TYPE"]
+api_key = os.environ["MITIGATE_LLM_KEY"]
+
+save_payload = {
+    "llm": {
+        "model": model,
+        "api_key": api_key,
+        "auth_type": auth_type,
+    },
+    "include_secrets": True,
 }
 
-req = urllib.request.Request(
-    "http://127.0.0.1:18000/api/settings",
-    data=json.dumps(payload).encode("utf-8"),
+save_req = urllib.request.Request(
+    f"{base}/api/profiles/{profile}",
+    data=json.dumps(save_payload).encode("utf-8"),
     headers={"Content-Type": "application/json"},
-    method="PATCH",
+    method="POST",
 )
-with urllib.request.urlopen(req, timeout=30) as response:
+
+with urllib.request.urlopen(save_req, timeout=30) as response:
+    if response.status != 201:
+        raise SystemExit(
+            f"POST /api/profiles/{profile} returned HTTP {response.status}"
+        )
+
+activate_req = urllib.request.Request(
+    f"{base}/api/profiles/{profile}/activate",
+    data=b"",
+    method="POST",
+)
+
+with urllib.request.urlopen(activate_req, timeout=30) as response:
     if response.status != 200:
-        raise SystemExit(f"PATCH /api/settings returned HTTP {response.status}")
+        raise SystemExit(
+            f"POST /api/profiles/{profile}/activate returned HTTP {response.status}"
+        )
 
-with urllib.request.urlopen("http://127.0.0.1:18000/api/settings", timeout=10) as response:
-    data = json.load(response)
+with urllib.request.urlopen(
+    f"{base}/api/profiles",
+    timeout=10,
+) as response:
+    profiles_data = json.load(response)
 
-llm = (data.get("agent_settings") or {}).get("llm") or {}
-if llm.get("model") != os.environ["MITIGATE_LLM_MODEL"]:
-    raise SystemExit("Persisted LLM model does not match requested model")
-if llm.get("auth_type") != os.environ["MITIGATE_LLM_AUTH_TYPE"]:
-    raise SystemExit("Persisted LLM auth type does not match requested auth type")
-if not llm.get("api_key"):
-    raise SystemExit("Persisted LLM API key is missing")
+with urllib.request.urlopen(
+    f"{base}/api/settings",
+    timeout=10,
+) as response:
+    settings_data = json.load(response)
+
+profiles = profiles_data.get("profiles") or []
+matched = next(
+    (item for item in profiles if item.get("name") == profile),
+    None,
+)
+
+if not matched:
+    raise SystemExit("Persisted LLM profile is missing")
+
+if matched.get("model") != model:
+    raise SystemExit(
+        "Persisted LLM profile model does not match requested model"
+    )
+
+if matched.get("api_key_set") is not True:
+    raise SystemExit("Persisted LLM profile API key is not set")
+
+if profiles_data.get("active_profile") != profile:
+    raise SystemExit("Persisted LLM profile is not active")
+
+llm = (settings_data.get("agent_settings") or {}).get("llm") or {}
+
+if settings_data.get("active_profile") != profile:
+    raise SystemExit(
+        "OpenHands settings active_profile does not match requested profile"
+    )
+
+if settings_data.get("llm_api_key_is_set") is not True:
+    raise SystemExit(
+        "OpenHands settings do not report an LLM API key"
+    )
+
+if llm.get("model") != model:
+    raise SystemExit("Active LLM model does not match requested model")
+
+if llm.get("auth_type") != auth_type:
+    raise SystemExit(
+        "Active LLM auth type does not match requested auth type"
+    )
 
 print("OPENHANDS_LLM_CONFIGURATION=OK")
-print("LLM_MODEL=" + llm["model"])
-print("LLM_AUTH_TYPE=" + llm["auth_type"])
+print("LLM_PROFILE=" + profile)
+print("LLM_MODEL=" + model)
+print("LLM_AUTH_TYPE=" + auth_type)
 print("LLM_API_KEY=<CONFIGURED_REDACTED>")
-PY
+PY_INNER
 
 unset OPENAI_KEY
 
-log "OpenHands LLM configuration complete"
+log "OpenHands LLM profile configuration complete"
