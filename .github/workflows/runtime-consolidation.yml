@@ -16,12 +16,14 @@ on:
       - 'agent/execution/runtime_branch_publisher.py'
       - 'agent/execution/workspace_manager.py'
       - 'agent/execution/upstream_manager.py'
+      - 'agent/operations/runtime_doctor.py'
       - 'agent/runtime/runtime_consolidation_controller.py'
       - 'agent/runtime/runtime_consolidation_worker.py'
       - 'agent/config/external-runtimes.json'
       - 'agent/bootstrap/install_external_runtimes.sh'
       - 'agent/bootstrap/enable_runtime_consolidation.sh'
       - 'agent/bootstrap/disable_runtime_consolidation.sh'
+      - 'agent/bootstrap/deploy_verified_main.sh'
       - 'agent/tests/test_runtime_adapter.py'
       - 'agent/tests/test_openhands_adapter.py'
       - 'agent/tests/test_runtime_router.py'
@@ -29,6 +31,7 @@ on:
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - 'agent/tests/test_external_runtime_adapters.py'
       - 'agent/tests/test_upstream_manager.py'
+      - 'agent/tests/test_runtime_doctor.py'
       - '.github/workflows/runtime-consolidation.yml'
 
 permissions:
@@ -59,6 +62,7 @@ jobs:
             agent/execution/runtime_branch_publisher.py \
             agent/execution/workspace_manager.py \
             agent/execution/upstream_manager.py \
+            agent/operations/runtime_doctor.py \
             agent/runtime/runtime_consolidation_controller.py \
             agent/runtime/runtime_consolidation_worker.py \
             agent/tests/test_runtime_adapter.py \
@@ -67,7 +71,8 @@ jobs:
             agent/tests/test_runtime_branch_publisher.py \
             agent/tests/test_runtime_consolidation_controller.py \
             agent/tests/test_external_runtime_adapters.py \
-            agent/tests/test_upstream_manager.py
+            agent/tests/test_upstream_manager.py \
+            agent/tests/test_runtime_doctor.py
 
       - name: Validate manifests and bootstrap scripts
         run: |
@@ -75,6 +80,7 @@ jobs:
           bash -n agent/bootstrap/install_external_runtimes.sh
           bash -n agent/bootstrap/enable_runtime_consolidation.sh
           bash -n agent/bootstrap/disable_runtime_consolidation.sh
+          bash -n agent/bootstrap/deploy_verified_main.sh
 
       - name: Run runtime tests
         run: |
@@ -86,4 +92,5 @@ jobs:
             agent.tests.test_runtime_consolidation_controller \
             agent.tests.test_external_runtime_adapters \
             agent.tests.test_upstream_manager \
+            agent.tests.test_runtime_doctor \
             -v

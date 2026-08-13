@@ -1,0 +1,128 @@
+name: External Runtime Security Audit
+
+on:
+  schedule:
+    - cron: '43 5 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'agent/config/external-runtimes.json'
+      - 'agent/bootstrap/install_external_runtimes.sh'
+      - '.github/workflows/external-runtime-security-audit.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit-external-runtime-pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Read tested pins
+        id: pins
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('agent/config/external-runtimes.json').read_text())
+          pins = {c['name']: c['pinned_version'] for c in data['components']}
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              for name in ('openhands', 'openclaw', 'ruflo'):
+                  f.write(f'{name}={pins[name]}\n')
+          PY
+
+      - name: Audit exact npm pins without lifecycle scripts
+        env:
+          OPENCLAW: ${{ steps.pins.outputs.openclaw }}
+          RUFLO: ${{ steps.pins.outputs.ruflo }}
+        run: |
+          mkdir -p /tmp/mitigate-runtime-audit/npm
+          cd /tmp/mitigate-runtime-audit/npm
+          npm init -y >/dev/null 2>&1
+          npm install --package-lock-only --ignore-scripts --no-fund --no-audit \
+            "openclaw@$OPENCLAW" "ruflo@$RUFLO" >/dev/null
+          npm audit --json > /tmp/mitigate-runtime-audit/npm-audit.json || true
+
+      - name: Audit exact OpenHands pin
+        env:
+          OPENHANDS: ${{ steps.pins.outputs.openhands }}
+        run: |
+          python -m pip install --quiet pip-audit
+          printf 'openhands-sdk==%s\nopenhands-tools==%s\n' "$OPENHANDS" "$OPENHANDS" \
+            > /tmp/mitigate-runtime-audit/requirements.txt
+          pip-audit -r /tmp/mitigate-runtime-audit/requirements.txt --format json \
+            > /tmp/mitigate-runtime-audit/pip-audit.json || true
+
+      - name: Build security report
+        id: report
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          npm = json.loads(Path('/tmp/mitigate-runtime-audit/npm-audit.json').read_text() or '{}')
+          counts = npm.get('metadata', {}).get('vulnerabilities', {}) or {}
+          critical = int(counts.get('critical', 0) or 0)
+          high = int(counts.get('high', 0) or 0)
+          moderate = int(counts.get('moderate', 0) or 0)
+          low = int(counts.get('low', 0) or 0)
+          total = int(counts.get('total', critical + high + moderate + low) or 0)
+
+          try:
+              pip = json.loads(Path('/tmp/mitigate-runtime-audit/pip-audit.json').read_text() or '[]')
+          except Exception:
+              pip = []
+          pip_findings = 0
+          if isinstance(pip, dict):
+              dependencies = pip.get('dependencies', [])
+          else:
+              dependencies = pip if isinstance(pip, list) else []
+          for dep in dependencies:
+              if isinstance(dep, dict):
+                  pip_findings += len(dep.get('vulns', []) or [])
+
+          needs_review = critical > 0 or high > 0 or pip_findings > 0
+          lines = [
+              '# MITIGATE external runtime security audit', '',
+              'This is a non-destructive audit of the exact tested pins. No dependency is auto-upgraded.', '',
+              f'- npm vulnerabilities: total={total}, critical={critical}, high={high}, moderate={moderate}, low={low}',
+              f'- OpenHands/Python vulnerability records: {pip_findings}',
+              f'- Commit: `{os.environ.get("GITHUB_SHA", "unknown")}`', '',
+              'Policy: findings require compatibility review in disposable environments. Never run `npm audit fix --force` against production runtimes.',
+          ]
+          Path('/tmp/mitigate-runtime-audit/report.md').write_text('\n'.join(lines) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'needs_review={str(needs_review).lower()}\n')
+          PY
+
+      - name: Publish summary
+        run: |
+          cat /tmp/mitigate-runtime-audit/report.md
+          cat /tmp/mitigate-runtime-audit/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or refresh security review issue
+        if: steps.report.outputs.needs_review == 'true' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="External runtime security audit requires review"
+          NUMBER="$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title --jq '.[] | select(.title == "External runtime security audit requires review") | .number' | head -n 1)"
+          if [ -n "$NUMBER" ]; then
+            gh issue edit "$NUMBER" --body-file /tmp/mitigate-runtime-audit/report.md
+          else
+            gh issue create --title "$TITLE" --body-file /tmp/mitigate-runtime-audit/report.md
+          fi
