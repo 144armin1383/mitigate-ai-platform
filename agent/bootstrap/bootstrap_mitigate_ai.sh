@@ -302,6 +302,24 @@ verify_stack() {
 
 
 
+
+install_runtime_gateway_service() {
+  log "Installing MITIGATE Runtime Gateway"
+
+  if ! grep -q '^MITIGATE_RUNTIME_GATEWAY_TOKEN=' "$RUNTIME_ENV"; then
+    printf 'MITIGATE_RUNTIME_GATEWAY_TOKEN=%s\n' \
+      "$(openssl rand -hex 32)" \
+      >> "$RUNTIME_ENV"
+  fi
+
+  install -m 0644 \
+    "$ROOT/agent/deploy/systemd/mitigate-ai-runtime-gateway.service" \
+    /etc/systemd/system/mitigate-ai-runtime-gateway.service
+
+  systemctl daemon-reload
+  systemctl enable --now mitigate-ai-runtime-gateway.service
+}
+
 install_web_panel_service() {
   log "Installing MITIGATE AI web control panel"
 
@@ -341,5 +359,6 @@ enable_consolidated_worker
 configure_canvas
 install_panel_service
 install_auto_update_management
+install_runtime_gateway_service
 install_web_panel_service
 verify_stack
