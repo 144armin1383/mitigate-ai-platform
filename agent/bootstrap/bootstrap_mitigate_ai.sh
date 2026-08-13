@@ -301,6 +301,18 @@ verify_stack() {
 }
 
 
+
+install_web_panel_service() {
+  log "Installing MITIGATE AI web control panel"
+
+  install -m 0644 \
+    "$ROOT/agent/deploy/systemd/mitigate-ai-panel.service" \
+    /etc/systemd/system/mitigate-ai-panel.service
+
+  systemctl daemon-reload
+  systemctl enable --now mitigate-ai-panel.service
+}
+
 install_auto_update_management() {
   log "Configuring host resources and automatic component updates"
 
@@ -329,4 +341,5 @@ enable_consolidated_worker
 configure_canvas
 install_panel_service
 install_auto_update_management
+install_web_panel_service
 verify_stack

@@ -1,0 +1,43 @@
+[Unit]
+Description=MITIGATE AI Web Control Panel
+After=network-online.target mitigate-ai-runtime-api.service
+Wants=network-online.target
+Requires=mitigate-ai-runtime-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+
+WorkingDirectory=/srv/mitigate/mitigate-ai-platform
+
+EnvironmentFile=/etc/mitigate-ai/runtime.env
+Environment="MITIGATE_EXTERNAL_RUNTIME_ROOT=/srv/mitigate/external-runtimes"
+Environment="MITIGATE_AI_PANEL_HOST=127.0.0.1"
+Environment="MITIGATE_AI_PANEL_PORT=8766"
+Environment="MITIGATE_AI_RUNTIME_BASE_URL=http://127.0.0.1:8765"
+
+ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.web.panel_server
+
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+UMask=0077
+
+ReadWritePaths=/srv/mitigate/data /srv/mitigate/ai-logs /var/log/mitigate-ai
+
+[Install]
+WantedBy=multi-user.target
