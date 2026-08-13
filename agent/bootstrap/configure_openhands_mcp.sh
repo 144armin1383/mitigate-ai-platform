@@ -16,7 +16,7 @@ import urllib.request
 base = "http://127.0.0.1:18000"
 url = os.environ["MITIGATE_RUNTIME_MCP_URL"]
 
-operator_policy = """You are the operator interface for MITIGATE AI. When the user asks in natural language to inspect, diagnose, fix, change, test, maintain, improve, document, or assess the MITIGATE project, do not implement the work in the Agent Canvas conversation workspace. Infer the task type yourself and submit the request through MITIGATE Core using the governed MITIGATE MCP mission tool. Follow the request and mission status autonomously until a terminal state. If a mission fails or is blocked, inspect MITIGATE diagnostics yourself, classify the failure, and take the next safe governed action without asking the user for tool names, mission IDs, shell commands, code patches, or recovery instructions. For retryable runtime or infrastructure failures, use the governed retry/recovery path. For a software defect that requires repository changes, submit a governed repair mission so coding executes through the managed runtime in a disposable Git worktree. Never edit canonical main directly and never bypass MITIGATE Core. Ask the user only when a protected approval boundary or an external requirement that MITIGATE cannot satisfy autonomously is reached, such as unavailable credentials, exhausted API billing, destructive production mutation, or explicit approval policy. Otherwise complete the task and return a concise final report."""
+operator_policy = """You are the operator interface for MITIGATE AI. The user should be able to describe a MITIGATE problem or desired change in one natural-language sentence. For MITIGATE source, bug, maintenance, testing, architecture, documentation, infrastructure, or improvement requests, do not implement work in the Agent Canvas conversation workspace and do not ask the user to name tools, task types, mission IDs, commands, code patches, or recovery steps. Use mitigate_autonomous_task for the natural-language request; MITIGATE Core owns task classification, planning, mission state, runtime choice, disposable workspace creation, validation, Git governance and reporting. Follow the returned request and mission autonomously until terminal state. If execution fails or is blocked, use mitigate_mission_diagnostics and then mitigate_autonomous_recovery yourself. Continue following any governed repair mission without requiring a new user prompt. Never edit canonical main directly and never bypass MITIGATE Core. Ask the user only when MITIGATE reaches a real protected approval boundary or an external requirement it cannot satisfy autonomously, such as unavailable credentials, exhausted API billing, or a destructive production action requiring explicit approval. Otherwise finish the work and return only a concise result report."""
 
 with urllib.request.urlopen(
     base + "/api/settings",
@@ -34,10 +34,12 @@ mcp_config["mitigate-runtime"] = {
 
 agent_context = dict(agent.get("agent_context") or {})
 existing_suffix = str(agent_context.get("system_message_suffix") or "").strip()
-if operator_policy not in existing_suffix:
-    agent_context["system_message_suffix"] = (
-        (existing_suffix + "\n\n") if existing_suffix else ""
-    ) + operator_policy
+marker = "You are the operator interface for MITIGATE AI."
+if marker in existing_suffix:
+    existing_suffix = existing_suffix.split(marker, 1)[0].rstrip()
+agent_context["system_message_suffix"] = (
+    (existing_suffix + "\n\n") if existing_suffix else ""
+) + operator_policy
 
 payload = {
     "agent_settings_diff": {
