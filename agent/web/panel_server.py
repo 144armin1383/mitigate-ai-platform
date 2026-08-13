@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from agent.web.external_runtime_probe import probe_external_runtimes
+
 
 TASK_TYPES = (
     "inspection",
@@ -42,7 +44,7 @@ PANEL_HTML = r'''<!doctype html>
 <meta name="color-scheme" content="dark">
 <title>MITIGATE AI Control Panel</title>
 <style>
-:root{--bg:#0b1020;--panel:#121a2d;--panel2:#182238;--line:#273652;--text:#eaf0ff;--muted:#8fa2c6;--accent:#7c9cff;--ok:#3bd09d;--warn:#f2b84b;--bad:#ff6b7a;--radius:16px}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#17264a 0,#0b1020 38%,#080c17 100%);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.side{border-right:1px solid var(--line);padding:24px 18px;background:rgba(8,12,23,.7);backdrop-filter:blur(12px);position:sticky;top:0;height:100vh}.brand{font-weight:800;letter-spacing:.08em;font-size:18px}.brand small{display:block;font-weight:500;letter-spacing:0;color:var(--muted);margin-top:6px}.nav{margin-top:28px}.nav a{display:block;color:var(--muted);text-decoration:none;padding:11px 12px;border-radius:10px;margin-bottom:6px}.nav a.active,.nav a:hover{background:var(--panel2);color:var(--text)}.health{margin-top:26px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:var(--warn)}.dot.ok{background:var(--ok)}.main{padding:28px;max-width:1400px;width:100%;margin:0 auto}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}.top h1{font-size:28px;margin:0}.top p{margin:6px 0 0;color:var(--muted)}.grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr);gap:20px}.card{background:rgba(18,26,45,.9);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:0 18px 50px rgba(0,0,0,.18)}.card h2{font-size:16px;margin:0 0 16px}.composer textarea{width:100%;min-height:180px;background:#0d1425;border:1px solid var(--line);border-radius:12px;color:var(--text);padding:14px;resize:vertical;font:inherit;outline:none}.composer textarea:focus,.composer select:focus{border-color:var(--accent)}.row{display:flex;gap:12px;align-items:center;margin-top:12px}.row select{background:#0d1425;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:11px 12px;min-width:180px}.btn{border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer}.btn.primary{background:var(--accent);color:#071022}.btn.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--line)}.btn:disabled{opacity:.55;cursor:not-allowed}.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.stat{padding:16px;background:#0d1425;border:1px solid var(--line);border-radius:12px}.stat b{font-size:25px;display:block}.stat span{color:var(--muted);font-size:13px}.history{margin-top:20px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;min-width:760px}th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px}th{color:var(--muted);font-weight:600;background:#0e1627}tr:last-child td{border-bottom:0}tbody tr{cursor:pointer}tbody tr:hover{background:#151f34}.badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:12px;background:#26314a;color:#cbd6ee}.badge.completed{background:rgba(59,208,157,.14);color:#65e7b7}.badge.running,.badge.retrying{background:rgba(242,184,75,.14);color:#ffd378}.badge.failed,.badge.blocked,.badge.cancelled{background:rgba(255,107,122,.14);color:#ff8d99}.detail{white-space:pre-wrap;background:#0d1425;border:1px solid var(--line);border-radius:12px;padding:14px;color:#cbd6ee;max-height:350px;overflow:auto;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.toast{position:fixed;right:22px;bottom:22px;background:#17223a;border:1px solid var(--line);padding:12px 16px;border-radius:10px;display:none;max-width:420px}.toast.show{display:block}.muted{color:var(--muted)}@media(max-width:900px){.shell{grid-template-columns:1fr}.side{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr}.main{padding:18px}}
+:root{--bg:#0b1020;--panel:#121a2d;--panel2:#182238;--line:#273652;--text:#eaf0ff;--muted:#8fa2c6;--accent:#7c9cff;--ok:#3bd09d;--warn:#f2b84b;--bad:#ff6b7a;--radius:16px}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#17264a 0,#0b1020 38%,#080c17 100%);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.side{border-right:1px solid var(--line);padding:24px 18px;background:rgba(8,12,23,.7);backdrop-filter:blur(12px);position:sticky;top:0;height:100vh}.brand{font-weight:800;letter-spacing:.08em;font-size:18px}.brand small{display:block;font-weight:500;letter-spacing:0;color:var(--muted);margin-top:6px}.nav{margin-top:28px}.nav a{display:block;color:var(--muted);text-decoration:none;padding:11px 12px;border-radius:10px;margin-bottom:6px}.nav a.active,.nav a:hover{background:var(--panel2);color:var(--text)}.health{margin-top:26px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:var(--warn)}.dot.ok{background:var(--ok)}.main{padding:28px;max-width:1400px;width:100%;margin:0 auto}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}.top h1{font-size:28px;margin:0}.top p{margin:6px 0 0;color:var(--muted)}.grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr);gap:20px}.card{background:rgba(18,26,45,.9);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:0 18px 50px rgba(0,0,0,.18)}.card h2{font-size:16px;margin:0 0 16px}.composer textarea{width:100%;min-height:180px;background:#0d1425;border:1px solid var(--line);border-radius:12px;color:var(--text);padding:14px;resize:vertical;font:inherit;outline:none}.composer textarea:focus,.composer select:focus{border-color:var(--accent)}.row{display:flex;gap:12px;align-items:center;margin-top:12px}.row select{background:#0d1425;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:11px 12px;min-width:180px}.btn{border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer}.btn.primary{background:var(--accent);color:#071022}.btn.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--line)}.btn:disabled{opacity:.55;cursor:not-allowed}.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.stat{padding:16px;background:#0d1425;border:1px solid var(--line);border-radius:12px}.stat b{font-size:25px;display:block}.stat span{color:var(--muted);font-size:13px}.history{margin-top:20px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;min-width:760px}th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px}th{color:var(--muted);font-weight:600;background:#0e1627}tr:last-child td{border-bottom:0}tbody tr{cursor:pointer}tbody tr:hover{background:#151f34}.badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:12px;background:#26314a;color:#cbd6ee}.badge.completed{background:rgba(59,208,157,.14);color:#65e7b7}.badge.running,.badge.retrying{background:rgba(242,184,75,.14);color:#ffd378}.badge.failed,.badge.blocked,.badge.cancelled{background:rgba(255,107,122,.14);color:#ff8d99}.detail{white-space:pre-wrap;background:#0d1425;border:1px solid var(--line);border-radius:12px;padding:14px;color:#cbd6ee;max-height:350px;overflow:auto;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.toast{position:fixed;right:22px;bottom:22px;background:#17223a;border:1px solid var(--line);padding:12px 16px;border-radius:10px;display:none;max-width:420px}.toast.show{display:block}.provider-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.provider-card{padding:14px;background:#0d1425;border:1px solid var(--line);border-radius:12px}.provider-name{font-weight:750;margin-bottom:7px}.provider-version{font-size:12px;color:var(--muted);margin-top:7px;overflow-wrap:anywhere}.provider-state{font-size:12px;font-weight:700}.provider-state.ok{color:var(--ok)}.provider-state.bad{color:var(--bad)}.provider-actions{display:flex;justify-content:flex-end;margin-top:14px}@media(max-width:900px){.provider-grid{grid-template-columns:1fr}}.muted{color:var(--muted)}@media(max-width:900px){.shell{grid-template-columns:1fr}.side{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr}.main{padding:18px}}
 </style>
 </head>
 <body>
@@ -58,6 +60,17 @@ PANEL_HTML = r'''<!doctype html>
       <div class="card composer"><h2>New request</h2><textarea id="message" placeholder="Describe what you want the agent to do…"></textarea><div class="row"><select id="taskType"></select><button class="btn primary" id="sendBtn">Send to Agent</button></div><div id="submitInfo" class="muted" style="margin-top:12px;font-size:13px"></div></div>
       <div class="card"><h2>Runtime overview</h2><div class="stats"><div class="stat"><b id="totalCount">0</b><span>Recent requests</span></div><div class="stat"><b id="activeCount">0</b><span>Active</span></div><div class="stat"><b id="doneCount">0</b><span>Completed</span></div><div class="stat"><b id="problemCount">0</b><span>Needs attention</span></div></div><div id="runtimeText" class="muted" style="margin-top:16px;font-size:13px">Loading runtime status…</div></div>
     </section>
+    <section class="card history" id="providers">
+      <h2>External runtimes</h2>
+      <div class="provider-grid" id="providerGrid">
+        <div class="muted">Checking OpenHands, OpenClaw and Ruflo…</div>
+      </div>
+      <div class="provider-actions">
+        <button class="btn secondary" id="providerProbeBtn">
+          Run runtime diagnostics
+        </button>
+      </div>
+    </section>
     <section class="card history" id="history"><h2>Recent requests</h2><div class="table-wrap"><table><thead><tr><th>Request</th><th>Status</th><th>Mission</th><th>Attempts</th><th>Priority</th></tr></thead><tbody id="requestRows"></tbody></table></div></section>
     <section class="card history" id="details"><h2>Selected request</h2><div id="detailTitle" class="muted" style="margin-bottom:10px">Select a request from the table.</div><div class="detail" id="detailBox">No request selected.</div></section>
   </main>
@@ -69,11 +82,43 @@ const toast=(msg)=>{const el=document.getElementById('toast');el.textContent=msg
 async function api(path,options={}){const r=await fetch(path,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});const t=await r.text();let j={};try{j=JSON.parse(t)}catch{}if(!r.ok)throw new Error(j?.error?.message||j?.error||('HTTP '+r.status));return j}
 function badge(s){return `<span class="badge ${s}">${s||'unknown'}</span>`}
 async function loadHealth(){try{const h=await api('/api/health');const r=await api('/api/runtime');document.getElementById('healthDot').classList.add('ok');document.getElementById('healthText').textContent='Runtime online';const d=r.data||r;document.getElementById('runtimeText').textContent=`State: ${d.state||'running'} · Worker: ${d.background_worker_running?'running':'unknown'} · Controller: ${d.autonomous_controller_running?'running':'unknown'}`;}catch(e){document.getElementById('healthDot').classList.remove('ok');document.getElementById('healthText').textContent='Runtime unavailable';document.getElementById('runtimeText').textContent=e.message}}
+
+function providerCard(item){
+    const ok=!!item.available;
+    const state=ok?'Available':'Unavailable';
+    const version=item.version||'version unavailable';
+    const extra=item.provider==='openhands'
+        ?` · LLM: ${item.llm_configured?'configured':'missing'}`
+        :(item.functional_probe
+            ?` · Diagnostic: ${item.functional_probe}`
+            :'');
+    return `<div class="provider-card">
+      <div class="provider-name">${escapeHtml(item.name||item.provider||'Runtime')}</div>
+      <div class="provider-state ${ok?'ok':'bad'}">${state}${escapeHtml(extra)}</div>
+      <div class="provider-version">${escapeHtml(version)}</div>
+    </div>`;
+}
+
+async function loadProviders(deep=false){
+    const grid=document.getElementById('providerGrid');
+    if(deep)grid.innerHTML='<div class="muted">Running runtime diagnostics…</div>';
+    try{
+        const j=await api('/api/providers'+(deep?'?deep=1':''));
+        const items=j.runtimes||[];
+        grid.innerHTML=items.map(providerCard).join('');
+        if(!items.length)grid.innerHTML='<div class="muted">No runtime providers reported.</div>';
+        if(deep)toast(j.ok?'Runtime diagnostics passed':'One or more runtime diagnostics need attention');
+    }catch(e){
+        grid.innerHTML=`<div class="muted">${escapeHtml(e.message)}</div>`;
+        if(deep)toast('Runtime diagnostics: '+e.message);
+    }
+}
+
 async function loadRequests(){try{const j=await api('/api/requests?limit=40');const data=j.data||j;const items=data.items||[];document.getElementById('totalCount').textContent=items.length;let active=0,done=0,problem=0;const tbody=document.getElementById('requestRows');tbody.innerHTML='';items.forEach(item=>{const s=item.status||'unknown';if(['pending','running','retrying'].includes(s))active++;if(s==='completed')done++;if(['failed','blocked','cancelled'].includes(s))problem++;const m=item.missions?.[0]?.mission||{};const tr=document.createElement('tr');tr.innerHTML=`<td>${escapeHtml(item.request_id||'')}</td><td>${badge(s)}</td><td>${escapeHtml(m.id||'—')}</td><td>${m.attempts_done??'—'}</td><td>${m.priority??'—'}</td>`;tr.onclick=()=>selectRequest(item.request_id);tbody.appendChild(tr)});document.getElementById('activeCount').textContent=active;document.getElementById('doneCount').textContent=done;document.getElementById('problemCount').textContent=problem;}catch(e){toast('History: '+e.message)}}
 function escapeHtml(v){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 async function selectRequest(id){try{const j=await api('/api/requests/'+encodeURIComponent(id)+'/status');document.getElementById('detailTitle').innerHTML=`<strong>${escapeHtml(id)}</strong> ${badge(j.data?.status||j.status||'unknown')}`;document.getElementById('detailBox').textContent=JSON.stringify(j.data||j,null,2)}catch(e){toast(e.message)}}
 async function submit(){const msg=document.getElementById('message').value.trim();if(!msg){toast('Write a request first.');return}const btn=document.getElementById('sendBtn');btn.disabled=true;document.getElementById('submitInfo').textContent='Submitting…';try{const j=await api('/api/requests',{method:'POST',body:JSON.stringify({message:msg,task_type:taskSelect.value})});const d=j.data||j;document.getElementById('submitInfo').textContent=`Accepted · ${d.request_id||''}`;document.getElementById('message').value='';toast('Request accepted by MITIGATE AI');await loadRequests();if(d.request_id)selectRequest(d.request_id)}catch(e){document.getElementById('submitInfo').textContent='Request failed: '+e.message;toast(e.message)}finally{btn.disabled=false}}
-document.getElementById('sendBtn').onclick=submit;document.getElementById('refreshBtn').onclick=()=>{loadHealth();loadRequests()};document.getElementById('message').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')submit()});loadHealth();loadRequests();setInterval(loadRequests,3000);setInterval(loadHealth,15000);
+document.getElementById('sendBtn').onclick=submit;document.getElementById('refreshBtn').onclick=()=>{loadHealth();loadProviders();loadRequests()};document.getElementById('message').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')submit()});document.getElementById('providerProbeBtn').onclick=()=>loadProviders(true);loadHealth();loadProviders();loadRequests();setInterval(loadRequests,3000);setInterval(loadHealth,15000);
 </script>
 </body></html>'''
 
@@ -205,6 +250,14 @@ class PanelServer:
                     return
                 if parsed.path == "/api/runtime":
                     self._proxy("/v1/runtime/status")
+                    return
+                if parsed.path == "/api/providers":
+                    params = urllib.parse.parse_qs(parsed.query)
+                    deep = params.get("deep", ["0"])[0] == "1"
+                    self._json(
+                        200,
+                        probe_external_runtimes(deep=deep),
+                    )
                     return
                 if parsed.path == "/api/requests":
                     query = ("?" + parsed.query) if parsed.query else ""
