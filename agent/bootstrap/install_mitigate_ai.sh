@@ -17,6 +17,16 @@ ACCESS_MODE="${MITIGATE_ACCESS_MODE:-local}"
 
 bash "$ROOT/agent/bootstrap/bootstrap_mitigate_ai.sh"
 
+[[ -x "$ROOT/agent/bootstrap/configure_openhands_llm.sh" || -f "$ROOT/agent/bootstrap/configure_openhands_llm.sh" ]] || {
+  echo "ERROR: configure_openhands_llm.sh not found under $ROOT" >&2
+  exit 1
+}
+
+MITIGATE_ROOT="$ROOT" \
+MITIGATE_OPENHANDS_LLM_MODEL="${MITIGATE_OPENHANDS_LLM_MODEL:-gpt-5.5}" \
+MITIGATE_OPENHANDS_LLM_AUTH_TYPE="${MITIGATE_OPENHANDS_LLM_AUTH_TYPE:-api_key}" \
+bash "$ROOT/agent/bootstrap/configure_openhands_llm.sh"
+
 if [[ "$ACCESS_MODE" != "local" ]]; then
   [[ -x "$ROOT/agent/bootstrap/configure_remote_access.sh" || -f "$ROOT/agent/bootstrap/configure_remote_access.sh" ]] || {
     echo "ERROR: configure_remote_access.sh not found under $ROOT" >&2
@@ -35,3 +45,4 @@ fi
 
 printf '\nMITIGATE AI INSTALLATION COMPLETE\n'
 printf 'Access mode: %s\n' "$ACCESS_MODE"
+printf 'OpenHands LLM model: %s\n' "${MITIGATE_OPENHANDS_LLM_MODEL:-gpt-5.5}"
