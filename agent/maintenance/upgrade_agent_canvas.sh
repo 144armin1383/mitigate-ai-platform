@@ -48,7 +48,134 @@ set_env() {
 }
 
 CURRENT_VERSION="$(get_env MITIGATE_AGENT_CANVAS_VERSION)"
-CURRENT_VERSION="${CURRENT_VERSION:-1.6.1}"
+CURRENT_VERSION="${CURRENT_VERSION:-1.13.0}"
+
+resolve_latest_version() {
+    python3 - <<'PY_RESOLVE'
+import json
+import platform
+import urllib.parse
+import urllib.request
+
+repo = "openhands/agent-canvas"
+registry = "https://ghcr.io"
+
+token_url = (
+    registry
+    + "/token?service=ghcr.io&scope="
+    + urllib.parse.quote(
+        f"repository:{repo}:pull",
+        safe=":",
+    )
+)
+
+with urllib.request.urlopen(token_url, timeout=20) as response:
+    token = json.load(response)["token"]
+
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Accept": ",".join([
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ]),
+}
+
+def get_json(url, extra_headers=None):
+    request_headers = dict(headers)
+    if extra_headers:
+        request_headers.update(extra_headers)
+
+    request = urllib.request.Request(
+        url,
+        headers=request_headers,
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+manifest = get_json(
+    f"{registry}/v2/{repo}/manifests/latest"
+)
+
+media_type = manifest.get("mediaType", "")
+
+if "index" in media_type or "manifest.list" in media_type:
+    machine = platform.machine().lower()
+
+    arch_map = {
+        "x86_64": "amd64",
+        "amd64": "amd64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+    }
+
+    architecture = arch_map.get(machine, machine)
+
+    selected = None
+
+    for item in manifest.get("manifests", []):
+        target = item.get("platform") or {}
+
+        if (
+            target.get("os") == "linux"
+            and target.get("architecture") == architecture
+        ):
+            selected = item
+            break
+
+    if selected is None:
+        raise SystemExit(
+            f"No linux/{architecture} Canvas manifest found"
+        )
+
+    digest = selected["digest"]
+
+    manifest = get_json(
+        f"{registry}/v2/{repo}/manifests/{digest}"
+    )
+
+config_digest = manifest["config"]["digest"]
+
+config = get_json(
+    f"{registry}/v2/{repo}/blobs/{config_digest}"
+)
+
+labels = (
+    config
+    .get("config", {})
+    .get("Labels", {})
+    or {}
+)
+
+version = labels.get(
+    "org.opencontainers.image.version"
+)
+
+if not version:
+    raise SystemExit(
+        "Agent Canvas latest image has no OCI version label"
+    )
+
+print(version.lstrip("v"))
+PY_RESOLVE
+}
+
+if [[ "$REQUESTED_TARGET" == "latest" ]]; then
+    log "Resolving latest Agent Canvas stable image metadata"
+
+    TARGET_VERSION="$(resolve_latest_version)"
+
+    echo "Current version: $CURRENT_VERSION"
+    echo "Latest version:  $TARGET_VERSION"
+
+    if [[ "$CURRENT_VERSION" == "$TARGET_VERSION" ]]; then
+        echo "AGENT_CANVAS_ALREADY_CURRENT=yes"
+        echo "AGENT_CANVAS_VERSION=$CURRENT_VERSION"
+        exit 0
+    fi
+fi
 
 FREE_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
 REQUIRED_KB=$((MIN_FREE_GB * 1024 * 1024))
@@ -104,38 +231,6 @@ MITIGATE_AGENT_CANVAS_VERSION="$TARGET_VERSION" \
 docker compose \
   --env-file "$ENV_FILE" \
   pull agent-canvas
-
-CURRENT_CONTAINER_ID="$(
-    docker compose \
-      --env-file "$ENV_FILE" \
-      ps -q agent-canvas 2>/dev/null || true
-)"
-
-CURRENT_IMAGE_ID=""
-
-if [[ -n "$CURRENT_CONTAINER_ID" ]]; then
-    CURRENT_IMAGE_ID="$(
-        docker inspect \
-          --format '{{.Image}}' \
-          "$CURRENT_CONTAINER_ID"
-    )"
-fi
-
-TARGET_IMAGE_ID="$(
-    docker image inspect \
-      "ghcr.io/openhands/agent-canvas:$TARGET_VERSION" \
-      --format '{{.Id}}'
-)"
-
-if [[ -n "$CURRENT_IMAGE_ID" && "$CURRENT_IMAGE_ID" == "$TARGET_IMAGE_ID" ]]; then
-    log "Agent Canvas already uses the latest target image"
-
-    trap - EXIT
-    rm -f "$BACKUP"
-
-    echo "AGENT_CANVAS_ALREADY_CURRENT=yes"
-    exit 0
-fi
 
 log "Starting target version"
 
@@ -238,11 +333,7 @@ LABEL_VERSION="${LABEL_VERSION#v}"
 
 RESOLVED_VERSION="$TARGET_VERSION"
 
-if [[ "$REQUESTED_TARGET" == "latest" ]]; then
-    if [[ -z "$LABEL_VERSION" || "$LABEL_VERSION" == "<no value>" ]]; then
-        die "Latest Canvas image does not expose a stable version label."
-    fi
-
+if [[ -n "$LABEL_VERSION" && "$LABEL_VERSION" != "<no value>" ]]; then
     RESOLVED_VERSION="$LABEL_VERSION"
 fi
 
