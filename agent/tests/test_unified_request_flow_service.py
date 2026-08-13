@@ -224,6 +224,24 @@ class UnifiedRequestFlowServiceTests(unittest.TestCase):
         self.assertEqual(approved.get("user_message"), req["user_message"])  # passed downstream only
         self.assertEqual(approved.get("upload_ids"), req["upload_ids"])  # passed downstream only
 
+    def test_missing_upload_ids_are_normalized_to_empty_list(self) -> None:
+        gate = FakeGate(accept_result=self._default_gate_accept())
+        planner = FakePlanner(mode="success")
+        service = self._build_service(gate, planner)
+
+        req = self._default_request()
+        req.pop("upload_ids", None)
+
+        result = service.submit(req)
+
+        self.assertTrue(result.get("accepted"))
+        self.assertIsNotNone(planner.last_approved_request)
+        assert planner.last_approved_request is not None
+        self.assertEqual(
+            planner.last_approved_request.get("upload_ids"),
+            [],
+        )
+
     # 8. Test selected provider and model preservation.
     def test_selected_provider_and_model_preservation(self) -> None:
         gate_accept = self._default_gate_accept()

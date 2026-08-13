@@ -226,7 +226,7 @@ class UnifiedRequestFlowService:
             # Only pass user_message downstream; never include it in status/events/logs
             "user_message": original_request.get("user_message"),
             # Preserve upload_ids for downstream only (not returned)
-            "upload_ids": deepcopy(original_request.get("upload_ids")),
+            "upload_ids": deepcopy(original_request.get("upload_ids") or []),
             # created_at and warning from the gate (do not synthesize)
             "created_at": gate_result.get("created_at"),
             "warning": gate_result.get("warning"),

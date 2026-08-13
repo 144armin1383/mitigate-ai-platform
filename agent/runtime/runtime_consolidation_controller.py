@@ -20,6 +20,7 @@ from agent.execution.runtime_branch_publisher import RuntimeBranchPublisher
 from agent.execution.runtime_router import RuntimeRouter
 from agent.execution.workspace_manager import DisposableWorkspaceManager
 from agent.runtime.production_mission_controller import ProductionMissionController
+from agent.runtime.read_only_inspection_executor import ReadOnlyInspectionExecutor
 
 
 AUTO_ROUTE_TASK_TYPES = frozenset(
@@ -32,6 +33,7 @@ AUTO_ROUTE_TASK_TYPES = frozenset(
         "refactor",
         "test",
         "tests",
+        "testing",
     }
 )
 
@@ -128,9 +130,29 @@ class RuntimeConsolidationController:
         )
         self.router = self._build_router()
 
+    def _execute_read_only_inspection(
+        self,
+        mission_id: str,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        executor = ReadOnlyInspectionExecutor(
+            self.repository_root,
+        )
+        return executor.execute(
+            mission_id,
+            context,
+        )
+
     def execute(self, mission: Dict[str, Any]) -> Dict[str, Any]:
         mission_id = str(mission.get("id") or "").strip()
         context, content = self._mission_context(mission_id)
+
+        task_type = self._task_type(content)
+        if task_type == "inspection":
+            return self._execute_read_only_inspection(
+                mission_id,
+                context,
+            )
 
         explicit_execution = (
             context.get("runtime_execution")

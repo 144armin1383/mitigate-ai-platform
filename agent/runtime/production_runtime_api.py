@@ -592,6 +592,7 @@ class StaticProviderRegistry:
         "seo",
         "content",
         "infrastructure",
+        "inspection",
         "testing",
         "documentation",
         "api",
