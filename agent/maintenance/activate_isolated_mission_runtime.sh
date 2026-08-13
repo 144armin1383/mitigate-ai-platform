@@ -19,20 +19,28 @@ python3 -m py_compile \
   agent/runtime/isolated_request_queue_adapter.py \
   agent/runtime/production_runtime_api_isolated.py \
   agent/runtime/workspace_production_mission_controller.py \
+  agent/runtime/managed_workspace_mission_controller.py \
+  agent/runtime/autonomous_mission_queue.py \
+  agent/runtime/autonomous_mission_diagnostics.py \
   agent/runtime/workspace_worker_entrypoint.py \
-  agent/tests/test_isolated_mission_runtime.py
+  agent/execution/external_openhands_runner.py \
+  agent/execution/managed_openhands_adapter.py \
+  agent/runtime/runtime_mcp_server_extended.py \
+  agent/tests/test_isolated_mission_runtime.py \
+  agent/tests/test_autonomous_operator_runtime.py
 
-# Fail closed before touching live services if the regression contract does not
-# prove canonical-repository isolation and preservation of unrelated untracked
-# files.
 "$ROOT/agent/.venv/bin/python" -m unittest \
-  agent.tests.test_isolated_mission_runtime -v
+  agent.tests.test_isolated_mission_runtime \
+  agent.tests.test_autonomous_operator_runtime -v
+
+OPENHANDS_PYTHON="${MITIGATE_OPENHANDS_PYTHON:-/srv/mitigate/external-runtimes/venv/bin/python}"
+test -x "$OPENHANDS_PYTHON"
+"$OPENHANDS_PYTHON" -c 'import openhands.sdk; print("MANAGED_OPENHANDS_IMPORT=OK")'
 
 install -d -m 0700 "$BACKUP_DIR"
 cp -a "$API_UNIT" "$BACKUP_DIR/" 2>/dev/null || true
 cp -a "$WORKER_UNIT" "$BACKUP_DIR/" 2>/dev/null || true
 
-# Stop claiming new work while request-runtime migration is activated.
 systemctl stop mitigate-ai-worker.service
 
 cat >"$API_UNIT" <<'EOF'
@@ -50,6 +58,7 @@ EnvironmentFile=/etc/mitigate-ai/runtime.env
 Environment="OPENCLAW_HOME=/srv/mitigate/data/openclaw"
 Environment="OPENCLAW_STATE_DIR=/srv/mitigate/data/openclaw"
 Environment="MITIGATE_AI_MISSION_DEFINITION_ROOT=/srv/mitigate/data/runtime/mission-definitions"
+Environment="MITIGATE_AI_AUTONOMOUS_MAX_RETRIES=2"
 ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.production_runtime_api_isolated
 Restart=on-failure
 RestartSec=5s
@@ -95,6 +104,8 @@ Environment="OPENCLAW_HOME=/srv/mitigate/data/openclaw"
 Environment="OPENCLAW_STATE_DIR=/srv/mitigate/data/openclaw"
 Environment="GIT_SSH_COMMAND=ssh -F /etc/mitigate-ai/ssh/config"
 Environment="MITIGATE_AI_MISSION_DEFINITION_ROOT=/srv/mitigate/data/runtime/mission-definitions"
+Environment="MITIGATE_AI_AUTONOMOUS_MAX_RETRIES=2"
+Environment="MITIGATE_OPENHANDS_PYTHON=/srv/mitigate/external-runtimes/venv/bin/python"
 ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.workspace_worker_entrypoint --queue-path /srv/mitigate/data/runtime/missions.json --worker-id production-worker --poll-interval 5 --heartbeat-path /srv/mitigate/data/runtime/worker.heartbeat
 Restart=on-failure
 RestartSec=5s
@@ -132,19 +143,33 @@ for _ in $(seq 1 30); do
   fi
   sleep 1
 done
-
 curl -fsS --max-time 5 http://127.0.0.1:8765/health/live >/dev/null
 
-# At API startup, only queue-correlated legacy generated mission definitions are
-# migrated from canonical Git into durable runtime state. Unrelated untracked
-# files are deliberately untouched.
 systemctl restart mitigate-ai-worker.service
 sleep 2
 
-test "$(systemctl is-active mitigate-ai-runtime-api.service)" = "active"
-test "$(systemctl is-active mitigate-ai-worker.service)" = "active"
+# The MCP and Panel depend on the production runtime but were historically left
+# inactive by this activation path. Restore them and reapply the persistent
+# autonomous Canvas policy every time the runtime is activated.
+bash "$ROOT/agent/bootstrap/configure_openhands_mcp.sh"
+systemctl restart mitigate-ai-runtime-mcp.service
+systemctl restart mitigate-ai-panel.service
+sleep 2
+
+for service in \
+  mitigate-ai-runtime-api.service \
+  mitigate-ai-worker.service \
+  mitigate-ai-runtime-gateway.service \
+  mitigate-ai-runtime-mcp.service \
+  mitigate-ai-panel.service
+do
+  test "$(systemctl is-active "$service")" = "active"
+done
+
+curl -fsS --max-time 5 http://127.0.0.1:8000/ready >/dev/null
 
 echo "ISOLATED_MISSION_RUNTIME_ACTIVATED=yes"
+echo "MITIGATE_AUTONOMOUS_OPERATOR=ACTIVE"
 echo "SYSTEMD_BACKUP_DIR=$BACKUP_DIR"
 echo "GIT_STATUS_BEGIN"
 git status --short
