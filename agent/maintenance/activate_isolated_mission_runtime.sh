@@ -19,7 +19,14 @@ python3 -m py_compile \
   agent/runtime/isolated_request_queue_adapter.py \
   agent/runtime/production_runtime_api_isolated.py \
   agent/runtime/workspace_production_mission_controller.py \
-  agent/runtime/workspace_worker_entrypoint.py
+  agent/runtime/workspace_worker_entrypoint.py \
+  agent/tests/test_isolated_mission_runtime.py
+
+# Fail closed before touching live services if the regression contract does not
+# prove canonical-repository isolation and preservation of unrelated untracked
+# files.
+"$ROOT/agent/.venv/bin/python" -m unittest \
+  agent.tests.test_isolated_mission_runtime -v
 
 install -d -m 0700 "$BACKUP_DIR"
 cp -a "$API_UNIT" "$BACKUP_DIR/" 2>/dev/null || true
