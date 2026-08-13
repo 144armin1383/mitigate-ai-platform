@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -568,6 +569,27 @@ class ProductionMissionController:
             mission_name,
         ]
 
+        runtime_env = dict(os.environ)
+
+        pythonpath_entries = [
+            str(self.repository_root),
+            str(self.agent_root),
+        ]
+
+        existing_pythonpath = runtime_env.get(
+            "PYTHONPATH",
+            "",
+        ).strip()
+
+        if existing_pythonpath:
+            pythonpath_entries.append(
+                existing_pythonpath
+            )
+
+        runtime_env["PYTHONPATH"] = os.pathsep.join(
+            pythonpath_entries
+        )
+
         try:
             result = subprocess.run(
                 command,
@@ -576,6 +598,7 @@ class ProductionMissionController:
                 capture_output=True,
                 timeout=self.timeout_seconds,
                 check=False,
+                env=runtime_env,
             )
         except subprocess.TimeoutExpired:
             restored = self._restore_main()
