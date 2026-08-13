@@ -1,0 +1,41 @@
+[Unit]
+Description=MITIGATE AI Runtime MCP Server
+After=network-online.target mitigate-ai-runtime-gateway.service
+Wants=network-online.target
+Requires=mitigate-ai-runtime-gateway.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+
+WorkingDirectory=/srv/mitigate/mitigate-ai-platform
+
+EnvironmentFile=/etc/mitigate-ai/runtime.env
+
+Environment="MITIGATE_RUNTIME_GATEWAY_URL=http://127.0.0.1:8770"
+Environment="MITIGATE_MCP_HOST=172.18.0.1"
+Environment="MITIGATE_MCP_PORT=8771"
+
+ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.runtime_mcp_server
+
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -303,6 +303,24 @@ verify_stack() {
 
 
 
+
+install_runtime_mcp_service() {
+  log "Installing MITIGATE Runtime MCP Server"
+
+  install -m 0644 \
+    "$ROOT/agent/deploy/systemd/mitigate-ai-runtime-mcp.service" \
+    /etc/systemd/system/mitigate-ai-runtime-mcp.service
+
+  systemctl daemon-reload
+  systemctl enable --now mitigate-ai-runtime-mcp.service
+}
+
+configure_canvas_mcp() {
+  log "Configuring Agent Canvas MITIGATE MCP tools"
+
+  "$ROOT/agent/bootstrap/configure_openhands_mcp.sh"
+}
+
 install_runtime_gateway_service() {
   log "Installing MITIGATE Runtime Gateway"
 
@@ -357,8 +375,10 @@ install_external_runtimes
 install_runtime_services
 enable_consolidated_worker
 configure_canvas
+configure_canvas_mcp
 install_panel_service
 install_auto_update_management
 install_runtime_gateway_service
+install_runtime_mcp_service
 install_web_panel_service
 verify_stack

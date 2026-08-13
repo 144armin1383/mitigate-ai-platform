@@ -6,3 +6,4 @@ rich
 pydantic
 psutil
 openai
+mcp>=2,<3
