@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+from dataclasses import replace
 from unittest import mock
 
 from agent.web.panel_server import PanelConfig, PanelServer, TASK_TYPES, _request_id
@@ -21,19 +22,16 @@ class WebPanelTests(unittest.TestCase):
         )
 
     def test_config_rejects_public_bind(self) -> None:
-        cfg = self.config()
         with self.assertRaisesRegex(ValueError, "public_bind_not_allowed"):
-            PanelConfig(**{**cfg.__dict__, "host": "0.0.0.0"}).validate()
+            replace(self.config(), host="0.0.0.0").validate()
 
     def test_config_requires_panel_password(self) -> None:
-        cfg = self.config()
         with self.assertRaisesRegex(ValueError, "missing_panel_password"):
-            PanelConfig(**{**cfg.__dict__, "password": ""}).validate()
+            replace(self.config(), password="").validate()
 
     def test_config_requires_api_token(self) -> None:
-        cfg = self.config()
         with self.assertRaisesRegex(ValueError, "missing_api_token"):
-            PanelConfig(**{**cfg.__dict__, "api_token": ""}).validate()
+            replace(self.config(), api_token="").validate()
 
     def test_basic_auth_is_constant_time_checked(self) -> None:
         server = PanelServer(self.config())
