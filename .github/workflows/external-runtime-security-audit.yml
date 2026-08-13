@@ -110,7 +110,9 @@ jobs:
           PY
 
       - name: Publish summary
-        run: cat /tmp/mitigate-runtime-audit/report.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          cat /tmp/mitigate-runtime-audit/report.md
+          cat /tmp/mitigate-runtime-audit/report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create or refresh security review issue
         if: steps.report.outputs.needs_review == 'true' && github.event_name != 'pull_request'
