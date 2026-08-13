@@ -45,6 +45,67 @@ class UpstreamRuntimeManagerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             UpstreamRuntimeManager(path).manifest()
 
+    def test_reads_npm_version_from_isolated_package_json_without_registry(self) -> None:
+        td, path = self._manifest(
+            {
+                "schema_version": 1,
+                "components": [
+                    {
+                        "name": "ruflo",
+                        "repository": "ruvnet/ruflo",
+                        "ecosystem": "npm",
+                        "package": "ruflo",
+                        "pinned_version": "3.38.8",
+                        "role": "benchmark",
+                        "required": False,
+                    }
+                ],
+            }
+        )
+        self.addCleanup(td.cleanup)
+        runtime_root = Path(td.name) / "runtime"
+        package_dir = runtime_root / "npm" / "node_modules" / "ruflo"
+        package_dir.mkdir(parents=True)
+        (package_dir / "package.json").write_text(
+            json.dumps({"name": "ruflo", "version": "3.38.8"}),
+            encoding="utf-8",
+        )
+        manager = UpstreamRuntimeManager(path, runtime_root=runtime_root)
+        self.assertEqual("3.38.8", manager.installed_versions()["ruflo"])
+        summary = manager.compatibility_summary()
+        self.assertTrue(summary["all_installed_match"])
+        self.assertEqual(str(runtime_root), summary["runtime_root"])
+
+    def test_reports_local_npm_version_mismatch(self) -> None:
+        td, path = self._manifest(
+            {
+                "schema_version": 1,
+                "components": [
+                    {
+                        "name": "openclaw",
+                        "repository": "openclaw/openclaw",
+                        "ecosystem": "npm",
+                        "package": "openclaw",
+                        "pinned_version": "2026.7.1",
+                        "role": "tools",
+                        "required": True,
+                    }
+                ],
+            }
+        )
+        self.addCleanup(td.cleanup)
+        runtime_root = Path(td.name) / "runtime"
+        package_dir = runtime_root / "npm" / "node_modules" / "openclaw"
+        package_dir.mkdir(parents=True)
+        (package_dir / "package.json").write_text(
+            json.dumps({"name": "openclaw", "version": "2026.8.0"}),
+            encoding="utf-8",
+        )
+        summary = UpstreamRuntimeManager(path, runtime_root=runtime_root).compatibility_summary()
+        self.assertFalse(summary["required_ok"])
+        self.assertFalse(summary["all_installed_match"])
+        self.assertFalse(summary["components"][0]["matches_pin"])
+
 
 if __name__ == "__main__":
     unittest.main()
