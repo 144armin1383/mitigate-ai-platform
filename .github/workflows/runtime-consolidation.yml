@@ -16,6 +16,7 @@ on:
       - 'agent/execution/workspace_manager.py'
       - 'agent/execution/upstream_manager.py'
       - 'agent/runtime/runtime_consolidation_controller.py'
+      - 'agent/runtime/runtime_consolidation_worker.py'
       - 'agent/config/external-runtimes.json'
       - 'agent/bootstrap/install_external_runtimes.sh'
       - 'agent/tests/test_runtime_adapter.py'
@@ -56,6 +57,7 @@ jobs:
             agent/execution/workspace_manager.py \
             agent/execution/upstream_manager.py \
             agent/runtime/runtime_consolidation_controller.py \
+            agent/runtime/runtime_consolidation_worker.py \
             agent/tests/test_runtime_adapter.py \
             agent/tests/test_openhands_adapter.py \
             agent/tests/test_runtime_router.py \
