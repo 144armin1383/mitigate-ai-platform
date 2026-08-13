@@ -1,0 +1,14 @@
+{
+  "id": "controller-package-path-fix",
+  "component": "production_mission_controller",
+  "purpose": "Robust, deterministic resolution of package and project paths for runtime resource loading.",
+  "owners": ["platform-runtime"],
+  "version": 1,
+  "status": "stable",
+  "created": "2026-08-13T06:47:38Z",
+  "checksum": "b8df423c8e6198e7e0f3121d1bd1f8c6",
+  "notes": [
+    "Ensures controller correctly locates package and repository roots regardless of CWD.",
+    "Enables accessing documentation resources from docs/architecture reliably."
+  ]
+}
