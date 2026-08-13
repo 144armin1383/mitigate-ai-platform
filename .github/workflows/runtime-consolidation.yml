@@ -1,0 +1,44 @@
+name: Runtime Consolidation CI
+
+on:
+  push:
+    branches:
+      - integration/runtime-consolidation
+  pull_request:
+    paths:
+      - 'agent/execution/runtime_adapter.py'
+      - 'agent/execution/openhands_adapter.py'
+      - 'agent/tests/test_runtime_adapter.py'
+      - 'agent/tests/test_openhands_adapter.py'
+      - '.github/workflows/runtime-consolidation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  adapter-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile adapter modules
+        run: |
+          python -m py_compile \
+            agent/execution/runtime_adapter.py \
+            agent/execution/openhands_adapter.py \
+            agent/tests/test_runtime_adapter.py \
+            agent/tests/test_openhands_adapter.py
+
+      - name: Run adapter tests
+        run: |
+          python -m unittest \
+            agent.tests.test_runtime_adapter \
+            agent.tests.test_openhands_adapter \
+            -v
