@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Sequence
+from typing import Any, Sequence
 
 from agent.execution.runtime_adapter import (
     ExecutionRequest,
@@ -20,9 +20,12 @@ class RuntimeRouter:
         self,
         registry: RuntimeRegistry,
         workspace_manager: DisposableWorkspaceManager,
+        *,
+        publisher: Any | None = None,
     ) -> None:
         self.registry = registry
         self.workspace_manager = workspace_manager
+        self.publisher = publisher
 
     def execute(
         self,
@@ -73,6 +76,18 @@ class RuntimeRouter:
 
         try:
             result = adapter.execute(routed_request)
+
+            if (
+                self.publisher is not None
+                and result.status == RuntimeStatus.succeeded
+                and result.evidence.changed_files
+            ):
+                result = self.publisher.publish(
+                    workspace=workspace,
+                    request=routed_request,
+                    result=result,
+                )
+
         except Exception as exc:
             result = ExecutionResult(
                 status=RuntimeStatus.failed,
@@ -84,9 +99,6 @@ class RuntimeRouter:
             try:
                 self.workspace_manager.remove(workspace)
             except WorkspaceError:
-                # Cleanup failure is itself unsafe. If execution otherwise
-                # succeeded, fail closed so MITIGATE never treats leaked runtime
-                # state as an accepted execution.
                 if "result" in locals() and result.status == RuntimeStatus.succeeded:
                     result = ExecutionResult(
                         status=RuntimeStatus.failed,
