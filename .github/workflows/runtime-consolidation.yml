@@ -8,16 +8,21 @@ on:
     paths:
       - 'agent/execution/runtime_adapter.py'
       - 'agent/execution/openhands_adapter.py'
+      - 'agent/execution/openhands_subprocess_runner.py'
       - 'agent/execution/openclaw_adapter.py'
       - 'agent/execution/ruflo_adapter.py'
       - 'agent/execution/runtime_router.py'
+      - 'agent/execution/runtime_branch_publisher.py'
       - 'agent/execution/workspace_manager.py'
       - 'agent/execution/upstream_manager.py'
+      - 'agent/runtime/runtime_consolidation_controller.py'
       - 'agent/config/external-runtimes.json'
       - 'agent/bootstrap/install_external_runtimes.sh'
       - 'agent/tests/test_runtime_adapter.py'
       - 'agent/tests/test_openhands_adapter.py'
       - 'agent/tests/test_runtime_router.py'
+      - 'agent/tests/test_runtime_branch_publisher.py'
+      - 'agent/tests/test_runtime_consolidation_controller.py'
       - 'agent/tests/test_external_runtime_adapters.py'
       - 'agent/tests/test_upstream_manager.py'
       - '.github/workflows/runtime-consolidation.yml'
@@ -43,14 +48,19 @@ jobs:
           python -m py_compile \
             agent/execution/runtime_adapter.py \
             agent/execution/openhands_adapter.py \
+            agent/execution/openhands_subprocess_runner.py \
             agent/execution/openclaw_adapter.py \
             agent/execution/ruflo_adapter.py \
             agent/execution/runtime_router.py \
+            agent/execution/runtime_branch_publisher.py \
             agent/execution/workspace_manager.py \
             agent/execution/upstream_manager.py \
+            agent/runtime/runtime_consolidation_controller.py \
             agent/tests/test_runtime_adapter.py \
             agent/tests/test_openhands_adapter.py \
             agent/tests/test_runtime_router.py \
+            agent/tests/test_runtime_branch_publisher.py \
+            agent/tests/test_runtime_consolidation_controller.py \
             agent/tests/test_external_runtime_adapters.py \
             agent/tests/test_upstream_manager.py
 
@@ -65,6 +75,8 @@ jobs:
             agent.tests.test_runtime_adapter \
             agent.tests.test_openhands_adapter \
             agent.tests.test_runtime_router \
+            agent.tests.test_runtime_branch_publisher \
+            agent.tests.test_runtime_consolidation_controller \
             agent.tests.test_external_runtime_adapters \
             agent.tests.test_upstream_manager \
             -v
