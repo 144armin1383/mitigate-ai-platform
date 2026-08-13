@@ -78,6 +78,19 @@ class RuntimeConsolidationControllerTests(unittest.TestCase):
         )
         self.assertIsNone(execution)
 
+    def test_testing_task_type_is_approved_for_openhands_auto_route(self) -> None:
+        execution = RuntimeConsolidationController._automatic_runtime_execution(
+            content="Task Type: testing\n\n## Objective\n\nRun bounded tests.\n",
+            context={
+                "objective": "Run bounded tests.",
+                "deliverables": ["tests/test_example.py"],
+            },
+        )
+
+        self.assertIsNotNone(execution)
+        assert execution is not None
+        self.assertEqual(["openhands"], execution["preferred"])
+
     def test_auto_route_rejects_unapproved_task_type(self) -> None:
         execution = RuntimeConsolidationController._automatic_runtime_execution(
             content="Task Type: deployment\n\n## Objective\n\nDeploy.\n",
