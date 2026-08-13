@@ -18,7 +18,7 @@ Environment="MITIGATE_AI_RUNTIME_BASE_URL=http://127.0.0.1:8765"
 Environment="MITIGATE_MCP_HOST=172.18.0.1"
 Environment="MITIGATE_MCP_PORT=8771"
 
-ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.runtime_mcp_server
+ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.runtime_mcp_server_extended
 
 Restart=on-failure
 RestartSec=5
