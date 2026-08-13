@@ -26,6 +26,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+BindPaths=/home/ubuntu/.openclaw
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
