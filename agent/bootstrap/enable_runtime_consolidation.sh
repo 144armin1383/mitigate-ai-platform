@@ -5,7 +5,8 @@ set -euo pipefail
 ROOT="${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}"
 RUNTIME_ROOT="${MITIGATE_EXTERNAL_RUNTIME_ROOT:-/srv/mitigate/external-runtimes}"
 DROPIN_DIR="/etc/systemd/system/mitigate-ai-worker.service.d"
-DROPIN="$DROPIN_DIR/runtime-consolidation.conf"
+DROPIN="$DROPIN_DIR/zzzz-runtime-consolidation.conf"
+LEGACY_DROPIN="$DROPIN_DIR/runtime-consolidation.conf"
 BACKUP_DIR="/srv/mitigate/data/runtime/recovery/runtime-consolidation-$(date -u +%Y%m%dT%H%M%SZ)"
 
 cd "$ROOT"
@@ -81,6 +82,13 @@ systemctl cat mitigate-ai-worker.service > "$BACKUP_DIR/mitigate-ai-worker.servi
 
 sudo mkdir -p "$DROPIN_DIR"
 
+# Remove the older lower-precedence filename if a previous activation created it.
+sudo rm -f "$LEGACY_DROPIN"
+
+# This file is intentionally named with a zzzz- prefix so it sorts after
+# existing execution-reporting, technology-lifecycle and zz-durable-checkpointing
+# drop-ins. systemd applies drop-ins lexicographically; the final ExecStart reset
+# must therefore belong to the consolidation layer while it is enabled.
 sudo tee "$DROPIN" >/dev/null <<EOF
 [Service]
 Environment="MITIGATE_EXTERNAL_RUNTIME_ROOT=$RUNTIME_ROOT"
@@ -93,36 +101,34 @@ sudo systemctl daemon-reload
 sudo systemctl restart mitigate-ai-worker.service
 sleep 3
 
-if [ "$(systemctl is-active mitigate-ai-worker.service)" != "active" ]; then
-  echo "ERROR: consolidated worker failed; rolling back"
-  sudo rm -f "$DROPIN"
+rollback_worker() {
+  sudo rm -f "$DROPIN" "$LEGACY_DROPIN"
   sudo systemctl daemon-reload
   sudo systemctl restart mitigate-ai-worker.service
+}
+
+if [ "$(systemctl is-active mitigate-ai-worker.service)" != "active" ]; then
+  echo "ERROR: consolidated worker failed; rolling back"
+  rollback_worker
   exit 30
 fi
 
 if [ "$(systemctl is-active mitigate-ai-runtime-api.service)" != "active" ]; then
   echo "ERROR: runtime API is not active; rolling back worker"
-  sudo rm -f "$DROPIN"
-  sudo systemctl daemon-reload
-  sudo systemctl restart mitigate-ai-worker.service
+  rollback_worker
   exit 31
 fi
 
 EXECSTART="$(systemctl show mitigate-ai-worker.service -p ExecStart --value)"
 if ! printf '%s' "$EXECSTART" | grep -q 'agent.runtime.runtime_consolidation_worker'; then
   echo "ERROR: consolidated worker entrypoint not active; rolling back"
-  sudo rm -f "$DROPIN"
-  sudo systemctl daemon-reload
-  sudo systemctl restart mitigate-ai-worker.service
+  rollback_worker
   exit 32
 fi
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "ERROR: canonical repository became dirty; rolling back worker"
-  sudo rm -f "$DROPIN"
-  sudo systemctl daemon-reload
-  sudo systemctl restart mitigate-ai-worker.service
+  rollback_worker
   exit 33
 fi
 
@@ -135,4 +141,5 @@ echo "Worker=$(systemctl is-active mitigate-ai-worker.service)"
 echo "RuntimeAPI=$(systemctl is-active mitigate-ai-runtime-api.service)"
 echo "MAIN=$(git rev-parse main)"
 echo "PRODUCTION_REPOSITORY_CLEAN=yes"
+echo "ACTIVE_DROPIN=$DROPIN"
 echo "ROLLBACK_BACKUP=$BACKUP_DIR"
