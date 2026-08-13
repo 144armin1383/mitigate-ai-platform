@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - integration/runtime-consolidation
+      - integration/runtime-consolidation-enable
   pull_request:
     paths:
       - 'agent/execution/runtime_adapter.py'
@@ -19,6 +20,8 @@ on:
       - 'agent/runtime/runtime_consolidation_worker.py'
       - 'agent/config/external-runtimes.json'
       - 'agent/bootstrap/install_external_runtimes.sh'
+      - 'agent/bootstrap/enable_runtime_consolidation.sh'
+      - 'agent/bootstrap/disable_runtime_consolidation.sh'
       - 'agent/tests/test_runtime_adapter.py'
       - 'agent/tests/test_openhands_adapter.py'
       - 'agent/tests/test_runtime_router.py'
@@ -66,10 +69,12 @@ jobs:
             agent/tests/test_external_runtime_adapters.py \
             agent/tests/test_upstream_manager.py
 
-      - name: Validate external runtime manifest
+      - name: Validate manifests and bootstrap scripts
         run: |
           python -m json.tool agent/config/external-runtimes.json >/dev/null
           bash -n agent/bootstrap/install_external_runtimes.sh
+          bash -n agent/bootstrap/enable_runtime_consolidation.sh
+          bash -n agent/bootstrap/disable_runtime_consolidation.sh
 
       - name: Run runtime tests
         run: |
