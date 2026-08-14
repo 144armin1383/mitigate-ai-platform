@@ -37,12 +37,7 @@ def _failure_evidence(mission_id: str) -> dict[str, Any]:
 
 
 def normalize_mission_status(mission: dict[str, Any]) -> dict[str, Any]:
-    """Expose a manual-review gate as awaiting approval, not as a failure.
-
-    The durable queue remains fail-closed with state=blocked for backward
-    compatibility. Public API consumers receive the semantic state together
-    with the underlying queue state so no safety boundary is weakened or hidden.
-    """
+    """Expose a manual-review gate as awaiting approval, not as a failure."""
     result = dict(mission or {})
     state = str(result.get("state") or "").strip().lower()
     if state != "blocked":
@@ -88,7 +83,7 @@ def normalize_request_status(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class ManualReviewAwareProductionRuntimeFacade(ProductionRuntimeFacade):
-    """Production facade with truthful manual-review and approval semantics."""
+    """Production facade with truthful manual-review decision semantics."""
 
     def get_mission(self, mission_id: str) -> dict[str, Any]:
         return normalize_mission_status(super().get_mission(mission_id))
@@ -109,26 +104,32 @@ class ManualReviewAwareProductionRuntimeFacade(ProductionRuntimeFacade):
         return result
 
     def process_execution_outcome(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Handle the bounded human approval action exposed by the panel.
-
-        RuntimePrivateAPI already authenticates this endpoint. The panel adds the
-        authenticated panel username server-side, so the browser cannot choose
-        an arbitrary approver identity.
-        """
+        """Handle authenticated human approval or rejection actions."""
         if not isinstance(payload, dict):
             raise ValueError("invalid_execution_outcome")
         action = str(payload.get("action") or "").strip().lower()
-        if action != "approve_manual_review":
+        if action not in {
+            "approve_manual_review",
+            "reject_manual_review",
+        }:
             raise ValueError("invalid_execution_outcome")
         mission_id = str(payload.get("mission_id") or "").strip()
-        approved_by = str(payload.get("approved_by") or "").strip()
+        actor = str(
+            payload.get("approved_by")
+            or payload.get("rejected_by")
+            or payload.get("decided_by")
+            or ""
+        ).strip()
         if self._queue is None:
             raise RuntimeError("queue_resolution_failed")
 
-        service = ManualReviewApprovalService(
-            queue=self._queue,
-        )
-        return service.approve(
+        service = ManualReviewApprovalService(queue=self._queue)
+        if action == "approve_manual_review":
+            return service.approve(
+                mission_id,
+                approved_by=actor,
+            )
+        return service.reject(
             mission_id,
-            approved_by=approved_by,
+            rejected_by=actor,
         )
