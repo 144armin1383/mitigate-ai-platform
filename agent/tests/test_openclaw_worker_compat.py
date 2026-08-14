@@ -8,7 +8,22 @@ from pathlib import Path
 
 
 class OpenClawWorkerCompatTests(unittest.TestCase):
-    def test_wrapper_applies_cwd_without_forwarding_unsupported_flag(self) -> None:
+    @staticmethod
+    def _compatible_fake(path: Path) -> None:
+        path.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ \"$*\" == \"agent exec --help\" ]]; then\n"
+            "  echo 'Usage: openclaw agent exec [message] --message-file <path> --cwd <dir> --json'\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [[ \"$*\" == \"--version\" ]]; then echo 'OpenClaw test'; exit 0; fi\n"
+            "printf 'PWD=%s\\n' \"$PWD\"\n"
+            "printf 'ARGS=%s\\n' \"$*\"\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+
+    def test_wrapper_applies_cwd_for_compatible_agent_exec(self) -> None:
         repo = Path(__file__).resolve().parents[2]
         wrapper = repo / "agent" / "execution" / "openclaw_compat_wrapper.sh"
         with tempfile.TemporaryDirectory() as td:
@@ -17,11 +32,7 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             workspace = workspaces / "m1-test"
             workspace.mkdir(parents=True)
             fake = root / "openclaw"
-            fake.write_text(
-                "#!/usr/bin/env bash\nprintf 'PWD=%s\\n' \"$PWD\"\nprintf 'ARGS=%s\\n' \"$*\"\n",
-                encoding="utf-8",
-            )
-            fake.chmod(0o755)
+            self._compatible_fake(fake)
             env = {
                 **os.environ,
                 "MITIGATE_OPENCLAW_REAL_BINARY": str(fake),
@@ -30,15 +41,8 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             }
             proc = subprocess.run(
                 [
-                    "bash",
-                    str(wrapper),
-                    "agent",
-                    "exec",
-                    "--message-file",
-                    "-",
-                    "--cwd",
-                    str(workspace),
-                    "--json",
+                    "bash", str(wrapper), "agent", "exec", "--message-file", "-",
+                    "--cwd", str(workspace), "--json",
                 ],
                 text=True,
                 input="probe",
@@ -51,6 +55,29 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             self.assertIn("ARGS=agent exec --message-file - --json", proc.stdout)
             self.assertNotIn("--cwd", proc.stdout)
 
+    def test_wrapper_marks_legacy_cli_unhealthy(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        wrapper = repo / "agent" / "execution" / "openclaw_compat_wrapper.sh"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake = root / "openclaw"
+            fake.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$*\" == \"--version\" ]]; then echo 'OpenClaw 2026.7.1'; exit 0; fi\n"
+                "echo 'Usage: openclaw agent [options]'\nexit 0\n",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            proc = subprocess.run(
+                ["bash", str(wrapper), "--version"],
+                text=True,
+                capture_output=True,
+                env={**os.environ, "MITIGATE_OPENCLAW_REAL_BINARY": str(fake)},
+                check=False,
+            )
+            self.assertEqual(64, proc.returncode)
+            self.assertIn("MITIGATE_OPENCLAW_AGENT_EXEC_UNSUPPORTED", proc.stderr)
+
     def test_wrapper_rejects_cwd_outside_disposable_root(self) -> None:
         repo = Path(__file__).resolve().parents[2]
         wrapper = repo / "agent" / "execution" / "openclaw_compat_wrapper.sh"
@@ -61,8 +88,7 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             workspaces.mkdir()
             outside.mkdir()
             fake = root / "openclaw"
-            fake.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-            fake.chmod(0o755)
+            self._compatible_fake(fake)
             proc = subprocess.run(
                 ["bash", str(wrapper), "agent", "exec", "--cwd", str(outside)],
                 text=True,
@@ -77,11 +103,12 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             self.assertEqual(2, proc.returncode)
             self.assertIn("outside MITIGATE disposable workspace root", proc.stderr)
 
-    def test_activation_uses_targeted_worker_override(self) -> None:
+    def test_activation_restores_hardening_for_legacy_openclaw(self) -> None:
         repo = Path(__file__).resolve().parents[2]
         text = (repo / "agent" / "maintenance" / "activate_openclaw_worker_compat.sh").read_text(encoding="utf-8")
+        self.assertIn("OPENCLAW_AGENT_EXEC_SUPPORTED=no", text)
+        self.assertIn('rm -f "$DROPIN_FILE"', text)
         self.assertIn("MemoryDenyWriteExecute=false", text)
-        self.assertIn('Environment="NODE_OPTIONS="', text)
         self.assertIn("MITIGATE_OPENCLAW_BINARY", text)
 
 
