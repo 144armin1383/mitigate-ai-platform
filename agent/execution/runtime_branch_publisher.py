@@ -3,9 +3,14 @@ from __future__ import annotations
 import subprocess
 import time
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from agent.execution.runtime_adapter import ExecutionRequest, ExecutionResult, RuntimeStatus
+from agent.execution.runtime_adapter import (
+    ExecutionEvidence,
+    ExecutionRequest,
+    ExecutionResult,
+    RuntimeStatus,
+)
 from agent.execution.workspace_manager import ExecutionWorkspace
 
 
@@ -18,12 +23,53 @@ class RuntimeBranchPublisher:
 
     External providers never commit, push, merge or touch canonical main. MITIGATE
     performs those actions after scope validation and while the disposable
-    worktree is still alive.
+    worktree is still alive. Publication is allowlist-based: provider-created
+    workspace/runtime artifacts outside the mission's authorized paths are never
+    staged or published and disappear with the disposable workspace.
     """
 
     def __init__(self, repository_root: str | Path, *, remote: str = "origin") -> None:
         self.repository_root = Path(repository_root).expanduser().resolve()
         self.remote = str(remote).strip() or "origin"
+
+    @staticmethod
+    def _normalized_path(value: str) -> str:
+        text = str(value or "").strip().replace("\\", "/")
+        while text.startswith("./"):
+            text = text[2:]
+        path = PurePosixPath(text)
+        if not text or path.is_absolute() or ".." in path.parts:
+            return ""
+        return str(path)
+
+    @classmethod
+    def _matches_scope(cls, path: str, scopes: tuple[str, ...]) -> bool:
+        candidate = cls._normalized_path(path)
+        if not candidate:
+            return False
+        for raw_scope in scopes:
+            scope = cls._normalized_path(raw_scope).rstrip("/")
+            if not scope:
+                continue
+            if candidate == scope or candidate.startswith(scope + "/"):
+                return True
+        return False
+
+    @classmethod
+    def _denied(cls, path: str, denied_paths: tuple[str, ...]) -> bool:
+        candidate = cls._normalized_path(path).lower()
+        if not candidate:
+            return True
+        parts = PurePosixPath(candidate).parts
+        for raw_scope in denied_paths:
+            scope = cls._normalized_path(raw_scope).lower().rstrip("/")
+            if not scope:
+                continue
+            if candidate == scope or candidate.startswith(scope + "/"):
+                return True
+            if "/" not in scope and scope in parts:
+                return True
+        return False
 
     def publish(
         self,
@@ -35,20 +81,72 @@ class RuntimeBranchPublisher:
         if result.status != RuntimeStatus.succeeded:
             return result
 
-        changed = tuple(result.evidence.changed_files)
-        if not changed:
+        runtime_changed = tuple(
+            path
+            for path in (
+                self._normalized_path(item)
+                for item in result.evidence.changed_files
+            )
+            if path
+        )
+        if not runtime_changed:
             return result
+
+        denied = tuple(
+            path for path in runtime_changed if self._denied(path, request.denied_paths)
+        )
+        if denied:
+            evidence = replace(
+                result.evidence,
+                diagnostics=tuple(result.evidence.diagnostics)
+                + ("runtime_changed_denied_paths:" + ",".join(denied[:20]),),
+            )
+            return replace(
+                result,
+                status=RuntimeStatus.blocked,
+                retryable=False,
+                reason="runtime_changed_denied_paths",
+                evidence=evidence,
+            )
+
+        if request.allowed_paths:
+            authorized = tuple(
+                path
+                for path in runtime_changed
+                if self._matches_scope(path, request.allowed_paths)
+            )
+            ignored = tuple(path for path in runtime_changed if path not in authorized)
+        else:
+            authorized = runtime_changed
+            ignored = ()
+
+        if not authorized:
+            evidence = replace(
+                result.evidence,
+                changed_files=(),
+                diagnostics=tuple(result.evidence.diagnostics)
+                + (
+                    "runtime_changes_outside_authorized_scope:"
+                    + ",".join(ignored[:20]),
+                ),
+                provider_metadata={
+                    **dict(result.evidence.provider_metadata or {}),
+                    "ignored_out_of_scope_files": list(ignored[:200]),
+                },
+            )
+            return replace(result, evidence=evidence)
 
         branch = self._branch_name(request.mission_id)
         path = workspace.path
 
         self._git(path, "switch", "-c", branch)
-        self._git(path, "add", "--all")
+        self._git(path, "add", "--", *authorized)
 
         staged = self._git(path, "diff", "--cached", "--name-only").stdout.splitlines()
         staged_paths = tuple(sorted(line.strip() for line in staged if line.strip()))
-        if staged_paths != tuple(sorted(changed)):
-            raise RuntimePublishError("published_scope_does_not_match_runtime_evidence")
+        expected_paths = tuple(sorted(authorized))
+        if staged_paths != expected_paths:
+            raise RuntimePublishError("published_scope_does_not_match_authorized_changes")
 
         self._git(path, "commit", "-m", f"Runtime mission: {request.mission_id}")
         commit = self._git(path, "rev-parse", "HEAD").stdout.strip()
@@ -57,12 +155,24 @@ class RuntimeBranchPublisher:
 
         self._git(path, "push", "-u", self.remote, branch)
 
+        diagnostics = tuple(result.evidence.diagnostics)
+        metadata = dict(result.evidence.provider_metadata or {})
+        if ignored:
+            diagnostics += (
+                "runtime_out_of_scope_changes_discarded:"
+                + ",".join(ignored[:20]),
+            )
+            metadata["ignored_out_of_scope_files"] = list(ignored[:200])
+
         return replace(
             result,
             evidence=replace(
                 result.evidence,
+                changed_files=staged_paths,
                 branch=branch,
                 commit_sha=commit,
+                diagnostics=diagnostics,
+                provider_metadata=metadata,
             ),
         )
 
