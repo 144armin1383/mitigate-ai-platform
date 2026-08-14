@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from agent.execution.external_openhands_runner import ExternalOpenHandsRunner
+from agent.execution.runtime_adapter import ExecutionRequest
+from agent.runtime.managed_workspace_mission_controller import ManagedWorkspaceMissionController
+from agent.runtime.runtime_mcp_server_extended import _infer_task_type
+
+
+class RuntimeExecutionObservabilityTests(unittest.TestCase):
+    def _request(self, repo: Path) -> ExecutionRequest:
+        return ExecutionRequest(
+            request_id="r1",
+            mission_id="m1",
+            objective="Fix the problem autonomously.",
+            repository_root=str(repo),
+            base_revision="main",
+            allowed_paths=("agent",),
+            timeout_seconds=60,
+            metadata={"model": "gpt-test"},
+        )
+
+    def test_managed_openhands_process_runs_from_disposable_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            workspace = root / "workspace"
+            python_path = root / "python"
+            runner_script = repo / "agent" / "execution" / "openhands_subprocess_runner.py"
+            workspace.mkdir(parents=True)
+            runner_script.parent.mkdir(parents=True)
+            runner_script.write_text("# runner\n", encoding="utf-8")
+            python_path.write_text("#!/bin/sh\n", encoding="utf-8")
+            python_path.chmod(0o700)
+
+            runner = ExternalOpenHandsRunner(
+                repository_root=repo,
+                python_path=python_path,
+            )
+            completed = SimpleNamespace(
+                returncode=0,
+                stdout='{"run_id":"run-1"}\n',
+                stderr="",
+            )
+            with patch("agent.execution.external_openhands_runner.subprocess.run", return_value=completed) as mocked:
+                result = runner(request=self._request(repo), workspace=workspace)
+
+            kwargs = mocked.call_args.kwargs
+            argv = mocked.call_args.args[0]
+            self.assertEqual(workspace.resolve(), Path(kwargs["cwd"]).resolve())
+            self.assertEqual(str(runner_script.resolve()), argv[1])
+            self.assertNotEqual(repo.resolve(), Path(kwargs["cwd"]).resolve())
+            self.assertEqual("run-1", result.id)
+            self.assertEqual(str(workspace.resolve()), result.provider_metadata["working_directory"])
+
+    def test_failure_evidence_is_persisted_before_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            data = root / "data"
+            repo.mkdir()
+            controller = object.__new__(ManagedWorkspaceMissionController)
+            controller.data_root = data
+            mission = {"id": "m123", "attempts_done": 1, "max_retries": 2}
+            result = {
+                "status": "retry",
+                "reason": "managed_openhands_execution_failed",
+                "provider": "openhands",
+                "failure_class": "transient_runtime",
+                "request_id": "r123",
+                "task_type": "bugfix",
+                "runtime_status": "failed",
+                "runtime_retryable": True,
+                "runtime_evidence": {
+                    "provider_metadata": {
+                        "returncode": 1,
+                        "stderr_tail": "example failure",
+                        "api_key": "must-not-persist",
+                    }
+                },
+            }
+
+            controller._persist_failure_evidence(mission=mission, result=result)
+            path = data / "runtime" / "failure-evidence" / "m123.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual("retry", payload["status"])
+            self.assertEqual("managed_openhands_execution_failed", payload["reason"])
+            self.assertEqual(1, payload["runtime_evidence"]["provider_metadata"]["returncode"])
+            self.assertEqual("<redacted>", payload["runtime_evidence"]["provider_metadata"]["api_key"])
+
+    def test_primary_intent_beats_incidental_security_terms(self) -> None:
+        self.assertEqual(
+            "bugfix",
+            _infer_task_type(
+                "Find the problem with the previous mission, fix it autonomously, "
+                "preserve security boundaries and complete the task."
+            ),
+        )
+        self.assertEqual(
+            "documentation",
+            _infer_task_type(
+                "Complete the runtime consolidation build-vs-adopt assessment with security analysis."
+            ),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
