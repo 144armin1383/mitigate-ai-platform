@@ -47,8 +47,9 @@ class ExternalOpenHandsRunner:
 
     The child Python environment is explicitly normalized to the managed
     OpenHands virtual environment. Worker/service Python variables must never
-    leak into the provider process because PYTHONHOME/PYTHONPATH/VIRTUAL_ENV can
-    make an otherwise valid external interpreter import the wrong environment.
+    leak into the provider process. The managed venv site-packages directory is
+    bound explicitly so systemd/service environment differences cannot make the
+    same interpreter lose access to the installed OpenHands SDK.
     """
 
     def __init__(
@@ -85,13 +86,18 @@ class ExternalOpenHandsRunner:
             raise ManagedOpenHandsProcessError("managed_openhands_workspace_unavailable")
         return resolved
 
+    def _managed_site_packages(self) -> tuple[Path, ...]:
+        venv_root = self.python_path.parent.parent.resolve()
+        candidates = sorted(
+            path.resolve()
+            for path in (venv_root / "lib").glob("python*/site-packages")
+            if path.is_dir()
+        )
+        return tuple(candidates)
+
     def _subprocess_env(self) -> dict[str, str]:
         env = dict(os.environ)
 
-        # Never inherit the worker/agent Python environment into the independent
-        # managed OpenHands interpreter. These variables can override venv
-        # discovery and reproduce a ModuleNotFoundError even when the exact same
-        # interpreter imports OpenHands successfully from an interactive shell.
         for key in (
             "PYTHONHOME",
             "PYTHONPATH",
@@ -101,20 +107,68 @@ class ExternalOpenHandsRunner:
             env.pop(key, None)
 
         venv_root = self.python_path.parent.parent.resolve()
+        site_packages = self._managed_site_packages()
         env["VIRTUAL_ENV"] = str(venv_root)
         existing_path = env.get("PATH", "")
         env["PATH"] = (
             str(self.python_path.parent)
             + (os.pathsep + existing_path if existing_path else "")
         )
+        if site_packages:
+            env["PYTHONPATH"] = os.pathsep.join(str(path) for path in site_packages)
         env["PYTHONNOUSERSITE"] = "1"
         env["OPENHANDS_SUPPRESS_BANNER"] = "1"
-
-        # Keep Git/runtime tools deterministic and stop user-level Git config
-        # warnings from influencing a provider run.
         env.setdefault("GIT_CONFIG_NOSYSTEM", "0")
         env["GIT_OPTIONAL_LOCKS"] = "0"
         return env
+
+    def _preflight(self, *, workspace: Path, env: dict[str, str], timeout: int) -> dict[str, Any]:
+        probe = (
+            "import importlib.util,json,site,sys;"
+            "print(json.dumps({"
+            "'executable':sys.executable,"
+            "'prefix':sys.prefix,"
+            "'base_prefix':sys.base_prefix,"
+            "'sitepackages':site.getsitepackages(),"
+            "'openhands_spec':getattr(importlib.util.find_spec('openhands'),'origin',None)"
+            "}))"
+        )
+        try:
+            proc = subprocess.run(
+                [str(self.python_path), "-c", probe],
+                cwd=workspace,
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=max(10, min(timeout, 30)),
+                check=False,
+            )
+        except OSError as exc:
+            raise ManagedOpenHandsProcessError(
+                "managed_openhands_process_start_failed",
+                stderr=str(exc),
+            ) from exc
+
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        payload: dict[str, Any] = {}
+        if proc.returncode == 0:
+            try:
+                parsed = json.loads(stdout.strip().splitlines()[-1])
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except (ValueError, IndexError):
+                payload = {}
+
+        if proc.returncode != 0 or not payload.get("openhands_spec"):
+            detail = json.dumps(payload, sort_keys=True) if payload else stdout
+            raise ManagedOpenHandsProcessError(
+                "managed_openhands_runtime_incompatible",
+                returncode=proc.returncode,
+                stdout=detail,
+                stderr=stderr,
+            )
+        return payload
 
     def __call__(self, *, request: ExecutionRequest, workspace: Path) -> Any:
         if not self.available():
@@ -143,6 +197,8 @@ class ExternalOpenHandsRunner:
             payload,
             separators=(",", ":"),
         )
+        timeout = max(30, int(request.timeout_seconds))
+        preflight = self._preflight(workspace=workspace, env=env, timeout=timeout)
 
         try:
             proc = subprocess.run(
@@ -156,7 +212,7 @@ class ExternalOpenHandsRunner:
                 env=env,
                 text=True,
                 capture_output=True,
-                timeout=max(30, int(request.timeout_seconds)),
+                timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -181,11 +237,18 @@ class ExternalOpenHandsRunner:
                 code = "managed_openhands_permission_denied"
             else:
                 code = "managed_openhands_execution_failed"
+            stderr_with_preflight = stderr
+            if preflight:
+                stderr_with_preflight += "\nMITIGATE_OPENHANDS_PREFLIGHT=" + json.dumps(
+                    preflight,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
             raise ManagedOpenHandsProcessError(
                 code,
                 returncode=proc.returncode,
                 stdout=stdout,
-                stderr=stderr,
+                stderr=stderr_with_preflight,
             )
 
         run_id = None
@@ -209,6 +272,8 @@ class ExternalOpenHandsRunner:
                 "working_directory": str(workspace),
                 "python_executable": str(self.python_path),
                 "virtual_env": str(self.python_path.parent.parent.resolve()),
+                "site_packages": [str(path) for path in self._managed_site_packages()],
+                "runtime_preflight": preflight,
                 "returncode": proc.returncode,
                 "stdout_tail": stdout[-2000:],
                 "stderr_tail": stderr[-2000:],
