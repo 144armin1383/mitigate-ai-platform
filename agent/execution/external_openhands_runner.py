@@ -35,6 +35,9 @@ class ExternalOpenHandsRunner:
         expanded_python = Path(configured).expanduser()
         self.python_path = Path(os.path.abspath(str(expanded_python)))
         self.runner_script = (self.repository_root / "agent" / "execution" / "openhands_subprocess_runner.py").resolve()
+        self.state_root = Path(
+            os.environ.get("MITIGATE_OPENHANDS_HOME") or "/srv/mitigate/data/openhands"
+        ).expanduser().absolute()
 
     def available(self) -> bool:
         return self.python_path.is_file() and os.access(self.python_path, os.X_OK) and self.runner_script.is_file()
@@ -66,6 +69,16 @@ class ExternalOpenHandsRunner:
             env["PYTHONPATH"] = os.pathsep.join(str(path) for path in site_packages)
         env["PYTHONNOUSERSITE"] = "1"
         env["OPENHANDS_SUPPRESS_BANNER"] = "1"
+
+        # ProtectHome=true intentionally makes /home/ubuntu unavailable to the
+        # worker. Keep OpenHands profiles/cache/state in MITIGATE's writable
+        # data root instead of allowing the SDK to fall back to ~/.openhands.
+        env["HOME"] = str(self.state_root)
+        env["XDG_CONFIG_HOME"] = str(self.state_root / ".config")
+        env["XDG_CACHE_HOME"] = str(self.state_root / ".cache")
+        env["XDG_DATA_HOME"] = str(self.state_root / ".local" / "share")
+        env["OPENHANDS_HOME"] = str(self.state_root / ".openhands")
+
         env.setdefault("GIT_CONFIG_NOSYSTEM", "0")
         env["GIT_OPTIONAL_LOCKS"] = "0"
         return env
@@ -174,6 +187,7 @@ class ExternalOpenHandsRunner:
                 "virtual_env": str(self._venv_root()),
                 "site_packages": [str(path) for path in self._managed_site_packages()],
                 "runtime_preflight": preflight,
+                "openhands_state_root": str(self.state_root),
                 "returncode": proc.returncode,
                 "stdout_tail": stdout[-2000:],
                 "stderr_tail": stderr[-2000:],
