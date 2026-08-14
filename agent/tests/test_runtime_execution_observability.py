@@ -32,6 +32,7 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
         workspace = root / "workspace"
         venv = root / "external-venv"
         python_path = venv / "bin" / "python"
+        site_packages = venv / "lib" / "python3.12" / "site-packages"
         runner_script = repo / "agent" / "execution" / "openhands_subprocess_runner.py"
         workspace.mkdir(parents=True)
         runner_script.parent.mkdir(parents=True)
@@ -39,9 +40,24 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
         python_path.parent.mkdir(parents=True)
         python_path.write_text("#!/bin/sh\n", encoding="utf-8")
         python_path.chmod(0o700)
+        site_packages.mkdir(parents=True)
         return repo, workspace, runner_script, ExternalOpenHandsRunner(
             repository_root=repo,
             python_path=python_path,
+        )
+
+    @staticmethod
+    def _preflight_success() -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "executable": "/managed/python",
+                "prefix": "/managed",
+                "base_prefix": "/usr",
+                "sitepackages": ["/managed/site-packages"],
+                "openhands_spec": "/managed/site-packages/openhands/__init__.py",
+            }) + "\n",
+            stderr="",
         )
 
     def test_managed_openhands_process_runs_from_disposable_workspace(self) -> None:
@@ -53,16 +69,22 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
                 stdout='{"run_id":"run-1"}\n',
                 stderr="",
             )
-            with patch("agent.execution.external_openhands_runner.subprocess.run", return_value=completed) as mocked:
+            with patch(
+                "agent.execution.external_openhands_runner.subprocess.run",
+                side_effect=[self._preflight_success(), completed],
+            ) as mocked:
                 result = runner(request=self._request(repo), workspace=workspace)
 
-            kwargs = mocked.call_args.kwargs
-            argv = mocked.call_args.args[0]
+            self.assertEqual(2, mocked.call_count)
+            runtime_call = mocked.call_args_list[1]
+            kwargs = runtime_call.kwargs
+            argv = runtime_call.args[0]
             self.assertEqual(workspace.resolve(), Path(kwargs["cwd"]).resolve())
             self.assertEqual(str(runner_script.resolve()), argv[1])
             self.assertNotEqual(repo.resolve(), Path(kwargs["cwd"]).resolve())
             self.assertEqual("run-1", result.id)
             self.assertEqual(str(workspace.resolve()), result.provider_metadata["working_directory"])
+            self.assertTrue(result.provider_metadata["runtime_preflight"]["openhands_spec"])
 
     def test_managed_openhands_child_python_environment_is_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -78,18 +100,47 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
                 "PATH": "/usr/bin",
             }
             with patch.dict(os.environ, contaminated, clear=False):
-                with patch("agent.execution.external_openhands_runner.subprocess.run", return_value=completed) as mocked:
+                with patch(
+                    "agent.execution.external_openhands_runner.subprocess.run",
+                    side_effect=[self._preflight_success(), completed],
+                ) as mocked:
                     runner(request=self._request(repo), workspace=workspace)
 
-            env = mocked.call_args.kwargs["env"]
+            env = mocked.call_args_list[0].kwargs["env"]
             self.assertNotIn("PYTHONHOME", env)
-            self.assertNotIn("PYTHONPATH", env)
             self.assertNotIn("PYTHONUSERBASE", env)
             self.assertNotIn("__PYVENV_LAUNCHER__", env)
             self.assertEqual(str(runner.python_path.parent.parent.resolve()), env["VIRTUAL_ENV"])
             self.assertTrue(env["PATH"].startswith(str(runner.python_path.parent) + os.pathsep))
+            self.assertEqual(
+                str(runner.python_path.parent.parent / "lib" / "python3.12" / "site-packages"),
+                env["PYTHONPATH"],
+            )
             self.assertEqual("1", env["PYTHONNOUSERSITE"])
             self.assertEqual("1", env["OPENHANDS_SUPPRESS_BANNER"])
+
+    def test_preflight_rejects_missing_openhands_before_agent_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo, workspace, _, runner = self._runner_fixture(root)
+            preflight = SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({
+                    "executable": str(runner.python_path),
+                    "prefix": str(runner.python_path.parent.parent),
+                    "base_prefix": "/usr",
+                    "sitepackages": [],
+                    "openhands_spec": None,
+                }) + "\n",
+                stderr="",
+            )
+            with patch(
+                "agent.execution.external_openhands_runner.subprocess.run",
+                return_value=preflight,
+            ) as mocked:
+                with self.assertRaisesRegex(RuntimeError, "managed_openhands_runtime_incompatible"):
+                    runner(request=self._request(repo), workspace=workspace)
+            self.assertEqual(1, mocked.call_count)
 
     def test_failure_evidence_is_persisted_before_retry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
