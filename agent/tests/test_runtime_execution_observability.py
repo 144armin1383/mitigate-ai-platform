@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,23 +27,27 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
             metadata={"model": "gpt-test"},
         )
 
+    def _runner_fixture(self, root: Path) -> tuple[Path, Path, Path, ExternalOpenHandsRunner]:
+        repo = root / "repo"
+        workspace = root / "workspace"
+        venv = root / "external-venv"
+        python_path = venv / "bin" / "python"
+        runner_script = repo / "agent" / "execution" / "openhands_subprocess_runner.py"
+        workspace.mkdir(parents=True)
+        runner_script.parent.mkdir(parents=True)
+        runner_script.write_text("# runner\n", encoding="utf-8")
+        python_path.parent.mkdir(parents=True)
+        python_path.write_text("#!/bin/sh\n", encoding="utf-8")
+        python_path.chmod(0o700)
+        return repo, workspace, runner_script, ExternalOpenHandsRunner(
+            repository_root=repo,
+            python_path=python_path,
+        )
+
     def test_managed_openhands_process_runs_from_disposable_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            repo = root / "repo"
-            workspace = root / "workspace"
-            python_path = root / "python"
-            runner_script = repo / "agent" / "execution" / "openhands_subprocess_runner.py"
-            workspace.mkdir(parents=True)
-            runner_script.parent.mkdir(parents=True)
-            runner_script.write_text("# runner\n", encoding="utf-8")
-            python_path.write_text("#!/bin/sh\n", encoding="utf-8")
-            python_path.chmod(0o700)
-
-            runner = ExternalOpenHandsRunner(
-                repository_root=repo,
-                python_path=python_path,
-            )
+            repo, workspace, runner_script, runner = self._runner_fixture(root)
             completed = SimpleNamespace(
                 returncode=0,
                 stdout='{"run_id":"run-1"}\n',
@@ -58,6 +63,33 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
             self.assertNotEqual(repo.resolve(), Path(kwargs["cwd"]).resolve())
             self.assertEqual("run-1", result.id)
             self.assertEqual(str(workspace.resolve()), result.provider_metadata["working_directory"])
+
+    def test_managed_openhands_child_python_environment_is_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo, workspace, _, runner = self._runner_fixture(root)
+            completed = SimpleNamespace(returncode=0, stdout='{"run_id":"run-2"}\n', stderr="")
+            contaminated = {
+                "PYTHONHOME": "/wrong/python/home",
+                "PYTHONPATH": "/wrong/python/path",
+                "PYTHONUSERBASE": "/wrong/user/base",
+                "__PYVENV_LAUNCHER__": "/wrong/launcher",
+                "VIRTUAL_ENV": "/wrong/venv",
+                "PATH": "/usr/bin",
+            }
+            with patch.dict(os.environ, contaminated, clear=False):
+                with patch("agent.execution.external_openhands_runner.subprocess.run", return_value=completed) as mocked:
+                    runner(request=self._request(repo), workspace=workspace)
+
+            env = mocked.call_args.kwargs["env"]
+            self.assertNotIn("PYTHONHOME", env)
+            self.assertNotIn("PYTHONPATH", env)
+            self.assertNotIn("PYTHONUSERBASE", env)
+            self.assertNotIn("__PYVENV_LAUNCHER__", env)
+            self.assertEqual(str(runner.python_path.parent.parent.resolve()), env["VIRTUAL_ENV"])
+            self.assertTrue(env["PATH"].startswith(str(runner.python_path.parent) + os.pathsep))
+            self.assertEqual("1", env["PYTHONNOUSERSITE"])
+            self.assertEqual("1", env["OPENHANDS_SUPPRESS_BANNER"])
 
     def test_failure_evidence_is_persisted_before_retry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
