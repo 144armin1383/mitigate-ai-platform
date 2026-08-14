@@ -110,6 +110,103 @@ def _mission_metadata(repo: Path, mission_id: str) -> dict[str, Any]:
     }
 
 
+def _bounded_runtime_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+    """Expose the failure facts an autonomous repair agent actually needs.
+
+    This is intentionally bounded and allow-listed. It does not dump arbitrary
+    mission context or secrets; it surfaces provider/result classification plus
+    the already bounded stdout/stderr tails written by the runtime controller.
+    """
+    result: dict[str, Any] = {}
+    for key in (
+        "status",
+        "failure_class",
+        "reason",
+        "provider",
+        "runtime_status",
+        "runtime_retryable",
+        "attempts_done",
+        "max_retries",
+        "task_type",
+        "request_id",
+    ):
+        value = payload.get(key)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            if key in payload:
+                result[key] = value
+
+    runtime_evidence = payload.get("runtime_evidence")
+    if not isinstance(runtime_evidence, dict):
+        return result
+
+    provider_metadata = runtime_evidence.get("provider_metadata")
+    if isinstance(provider_metadata, dict):
+        metadata: dict[str, Any] = {}
+        for key in (
+            "error_code",
+            "mode",
+            "runtime",
+            "returncode",
+            "working_directory",
+            "python_executable",
+            "virtual_env",
+        ):
+            value = provider_metadata.get(key)
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                if key in provider_metadata:
+                    metadata[key] = value
+
+        for key in ("stdout_tail", "stderr_tail"):
+            value = provider_metadata.get(key)
+            if isinstance(value, str):
+                metadata[key] = value[-4000:]
+
+        site_packages = provider_metadata.get("site_packages")
+        if isinstance(site_packages, list):
+            metadata["site_packages"] = [str(item)[:1000] for item in site_packages[:20]]
+
+        preflight = provider_metadata.get("runtime_preflight")
+        if isinstance(preflight, dict):
+            metadata["runtime_preflight"] = {
+                str(k): v
+                for k, v in preflight.items()
+                if k in {
+                    "executable",
+                    "prefix",
+                    "base_prefix",
+                    "sitepackages",
+                    "openhands_spec",
+                }
+                and isinstance(v, (str, int, float, bool, list, type(None)))
+            }
+
+        if metadata:
+            result["provider_metadata"] = metadata
+
+    diagnostics = runtime_evidence.get("diagnostics")
+    if isinstance(diagnostics, list):
+        result["diagnostics"] = [str(item)[:1000] for item in diagnostics[:20]]
+    return result
+
+
+def _failure_evidence(data_root: Path, mission_id: str) -> dict[str, Any]:
+    path = data_root / "runtime" / "failure-evidence" / f"{mission_id}.json"
+    if not path.is_file():
+        return {"exists": False, "path": str(path)}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {"exists": True, "path": str(path), "readable": False}
+    if not isinstance(payload, dict):
+        return {"exists": True, "path": str(path), "readable": False}
+    return {
+        "exists": True,
+        "path": str(path),
+        "readable": True,
+        **_bounded_runtime_evidence(payload),
+    }
+
+
 def _runtime_artifacts(data_root: Path, mission_id: str) -> list[dict[str, Any]]:
     runtime_root = data_root / "runtime"
     if not runtime_root.is_dir():
@@ -230,6 +327,7 @@ def collect_mission_diagnostics(
             "mission_branches": branch_matches,
         },
         "mission_artifact": _mission_metadata(repo, mission_id),
+        "failure_evidence": _failure_evidence(root, mission_id),
         "runtime_artifacts": _runtime_artifacts(root, mission_id),
     }
 
