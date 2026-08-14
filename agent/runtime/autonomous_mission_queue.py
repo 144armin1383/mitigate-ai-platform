@@ -3,7 +3,11 @@ from __future__ import annotations
 import os
 from typing import Optional, Sequence
 
-from agent.runtime.mission_queue import MissionQueue
+from agent.runtime.mission_queue import (
+    MissionQueue,
+    MissionState,
+    _FileLock,
+)
 
 
 class AutonomousMissionQueue(MissionQueue):
@@ -37,6 +41,26 @@ class AutonomousMissionQueue(MissionQueue):
             dependencies,
             max_retries=int(effective),
         )
+
+    def approve_manual_review(self, mission_id: str) -> None:
+        """Atomically finalize a human-approved manual-review mission.
+
+        This transition is intentionally unavailable to the autonomous worker.
+        The governed approval service calls it only after the mission branch has
+        been validated and safely fast-forwarded into canonical ``main``.
+        """
+        with _FileLock(self._lock_path):
+            self._load()
+            mission = self._get_mission_or_raise(mission_id)
+            if mission.state == MissionState.completed:
+                return
+            if mission.state != MissionState.blocked:
+                raise ValueError(
+                    "approve_manual_review() requires mission to be blocked"
+                )
+            mission.state = MissionState.completed
+            self._validate_no_cycles()
+            self._save()
 
 
 __all__ = ["AutonomousMissionQueue"]
