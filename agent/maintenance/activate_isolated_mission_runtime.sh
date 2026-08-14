@@ -5,6 +5,7 @@ IFS=$'\n\t'
 ROOT="${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}"
 API_UNIT="/etc/systemd/system/mitigate-ai-runtime-api.service"
 WORKER_UNIT="/etc/systemd/system/mitigate-ai-worker.service"
+OPENHANDS_STATE_ROOT="${MITIGATE_OPENHANDS_HOME:-/srv/mitigate/data/openhands}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="/etc/mitigate-ai/systemd-backups/$STAMP"
 
@@ -14,6 +15,15 @@ BACKUP_DIR="/etc/mitigate-ai/systemd-backups/$STAMP"
 }
 
 cd "$ROOT"
+
+# OpenHands runs as the unprivileged ubuntu worker while ProtectHome=true keeps
+# /home/ubuntu inaccessible. Provision a dedicated writable state tree under
+# MITIGATE's managed data root so profiles/cache/state never fall back to HOME.
+install -d -o ubuntu -g ubuntu -m 0700 "$OPENHANDS_STATE_ROOT"
+for relative in .config .cache .local .local/share .openhands; do
+  install -d -o ubuntu -g ubuntu -m 0700 "$OPENHANDS_STATE_ROOT/$relative"
+done
+chown -R ubuntu:ubuntu "$OPENHANDS_STATE_ROOT"
 
 python3 -m py_compile \
   agent/runtime/isolated_request_queue_adapter.py \
@@ -36,7 +46,8 @@ python3 -m py_compile \
   agent/tests/test_host_recovery_supervisor.py \
   agent/tests/test_mission_diagnostics_git_warnings.py \
   agent/tests/test_runtime_execution_observability.py \
-  agent/tests/test_runtime_router_failover.py
+  agent/tests/test_runtime_router_failover.py \
+  agent/tests/test_openhands_managed_home.py
 
 "$ROOT/agent/.venv/bin/python" -m unittest \
   agent.tests.test_isolated_mission_runtime \
@@ -44,12 +55,13 @@ python3 -m py_compile \
   agent.tests.test_host_recovery_supervisor \
   agent.tests.test_mission_diagnostics_git_warnings \
   agent.tests.test_runtime_execution_observability \
-  agent.tests.test_runtime_router_failover -v
+  agent.tests.test_runtime_router_failover \
+  agent.tests.test_openhands_managed_home -v
 
 OPENHANDS_PYTHON="${MITIGATE_OPENHANDS_PYTHON:-/srv/mitigate/external-runtimes/venv/bin/python}"
 OPENHANDS_OK=0
 if [[ -x "$OPENHANDS_PYTHON" ]]; then
-  if "$OPENHANDS_PYTHON" - <<'PY'
+  if HOME="$OPENHANDS_STATE_ROOT" XDG_CONFIG_HOME="$OPENHANDS_STATE_ROOT/.config" XDG_CACHE_HOME="$OPENHANDS_STATE_ROOT/.cache" XDG_DATA_HOME="$OPENHANDS_STATE_ROOT/.local/share" OPENHANDS_HOME="$OPENHANDS_STATE_ROOT/.openhands" "$OPENHANDS_PYTHON" - <<'PY'
 from openhands.sdk import Agent, Conversation, LLM, Tool
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.task_tracker import TaskTrackerTool
@@ -59,6 +71,7 @@ PY
     OPENHANDS_OK=1
     echo "MANAGED_OPENHANDS_API_IMPORTS=OK"
     echo "MANAGED_OPENHANDS_TOOL_IMPORTS=OK"
+    echo "MANAGED_OPENHANDS_STATE=OK"
   else
     echo "MANAGED_OPENHANDS_IMPORTS=UNAVAILABLE"
   fi
@@ -134,7 +147,7 @@ RuntimeDirectoryMode=0750
 WantedBy=multi-user.target
 EOF
 
-cat >"$WORKER_UNIT" <<'EOF'
+cat >"$WORKER_UNIT" <<EOF
 [Unit]
 Description=MITIGATE AI Autonomous Background Worker
 After=network-online.target mitigate-ai-runtime-api.service
@@ -155,6 +168,7 @@ Environment="MITIGATE_AI_MISSION_DEFINITION_ROOT=/srv/mitigate/data/runtime/miss
 Environment="MITIGATE_AI_AUTONOMOUS_MAX_RETRIES=2"
 Environment="MITIGATE_AI_RECOVERY_CHAIN_LIMIT=2"
 Environment="MITIGATE_OPENHANDS_PYTHON=/srv/mitigate/external-runtimes/venv/bin/python"
+Environment="MITIGATE_OPENHANDS_HOME=$OPENHANDS_STATE_ROOT"
 Environment="MITIGATE_OPENCLAW_BINARY=/srv/mitigate/external-runtimes/npm/node_modules/.bin/openclaw"
 ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.workspace_worker_entrypoint --queue-path /srv/mitigate/data/runtime/missions.json --worker-id production-worker --poll-interval 5 --heartbeat-path /srv/mitigate/data/runtime/worker.heartbeat
 Restart=on-failure
@@ -221,9 +235,7 @@ echo "MITIGATE_HOST_RECOVERY_SUPERVISOR=ACTIVE"
 echo "MITIGATE_RECOVERY_CHAIN_LIMIT=2"
 echo "MITIGATE_GIT_DIAGNOSTICS_WARNING_ISOLATION=ACTIVE"
 echo "MITIGATE_OPENHANDS_DISPOSABLE_CWD=ACTIVE"
-echo "MITIGATE_OPENCLAW_CODING_FALLBACK=ACTIVE"
-echo "MITIGATE_OPENCLAW_JITLESS=ACTIVE"
-echo "MITIGATE_PROVIDER_FAILOVER=openhands->openclaw"
+echo "MITIGATE_OPENHANDS_MANAGED_HOME=ACTIVE"
 echo "MITIGATE_PROVIDER_FAILOVER_ROUTER=ACTIVE"
 echo "MITIGATE_FAILURE_EVIDENCE=ACTIVE"
 echo "MITIGATE_INTENT_CLASSIFIER_V2=ACTIVE"
