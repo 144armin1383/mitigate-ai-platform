@@ -9,6 +9,29 @@ WORKSPACE_ROOT="${MITIGATE_WORKSPACE_ROOT:-/srv/mitigate/data/runtime/workspaces
   exit 127
 }
 
+supports_agent_exec() {
+  local help
+  help="$($REAL_BINARY agent exec --help 2>&1 || true)"
+  [[ "$help" == *"--message-file"* && "$help" == *"--cwd"* ]]
+}
+
+# The MITIGATE adapter healthcheck currently invokes --version. Make that
+# healthcheck capability-aware: OpenClaw is a coding provider only when the
+# installed CLI really exposes the agent-exec contract MITIGATE requires.
+if [[ $# -eq 1 && "$1" == "--version" ]]; then
+  if ! supports_agent_exec; then
+    "$REAL_BINARY" --version || true
+    echo "MITIGATE_OPENCLAW_AGENT_EXEC_UNSUPPORTED" >&2
+    exit 64
+  fi
+  exec "$REAL_BINARY" --version
+fi
+
+if [[ ${1:-} == "agent" && ${2:-} == "exec" ]] && ! supports_agent_exec; then
+  echo "MITIGATE_OPENCLAW_AGENT_EXEC_UNSUPPORTED" >&2
+  exit 64
+fi
+
 args=("$@")
 filtered=()
 cwd=""
