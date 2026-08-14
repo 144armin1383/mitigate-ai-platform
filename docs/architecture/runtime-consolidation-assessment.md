@@ -1,262 +1,247 @@
-# MITIGATE AI Runtime Consolidation Assessment
+# MITIGATE AI Runtime Consolidation / Build-vs-Adopt Assessment
 
-Status: active integration work
-Branch: `integration/runtime-consolidation`
+Status: assessment complete; migration not started.
+Scope: documentation artifact only; no production architecture, configuration, code, permission, merge, deployment, or upstream-runtime changes.
 
-## Objective
+## 1. Executive summary
 
-Reduce custom runtime code and maintenance burden while preserving MITIGATE AI as the independent control plane and source of authority.
+MITIGATE is already partially consolidated. Repository evidence shows a Core-owned request API/MCP surface (`agent/runtime/runtime_mcp_server.py`, `production_runtime_api.py`), mission queue and worker (`mission_queue.py`, `background_worker.py`), replaceable runtime adapter contract (`agent/execution/runtime_adapter.py`), explicit router (`runtime_router.py`), disposable Git worktrees (`workspace_manager.py`), Core-owned branch publishing (`runtime_branch_publisher.py`), OpenHands/OpenClaw/Ruflo adapters, Agent Canvas overlay, provider/model governance, memory, audit, bootstrap, and upstream-version metadata.
 
-MITIGATE must remain portable, provider-agnostic, replaceable at the execution layer, and able to continue operating if any external runtime is removed.
+The target direction is correct: MITIGATE should keep authority over intelligence, governance, mission state, approvals, auditability, project/business knowledge, memory, provider routing, security boundaries, Git authority, validation, and rollback, while external runtimes provide replaceable execution. Current custom generic runtime code remains significant: `mission_runner.py` (826 lines), `code_generator.py` (191), `retry_engine.py` (446), `autonomous_controller.py` (402), `background_worker.py` (860), `mission_queue.py` (510), and repair-loop files (674). Some is Core-specific and should remain; generic coding/shell/file/test/retry/repair loops should shrink after adapter parity.
 
-## Non-negotiable architecture rules
+Recommendation: **GO for phased migration planning and phases 1-2 only**. Do not delete legacy paths or make production dependency changes until OpenHands health, workspace-cleanliness regression tests, provider evidence, rollback switches, and fresh-server restore validation are complete.
 
-1. MITIGATE owns policy, approvals, mission intent, project memory, audit evidence, business/project knowledge and GitHub source-of-truth.
-2. External agent runtimes are capability providers only.
-3. Every external runtime is accessed through a MITIGATE-owned adapter contract.
-4. No external runtime may become the only location of mission state, project memory or governance rules.
-5. Upstream projects are consumed as versioned dependencies; avoid forks and internal-source imports unless no stable public surface exists.
-6. Every adopted dependency must have a tested update path and rollback path.
-7. New generic infrastructure must pass a Build-vs-Adopt gate before being implemented inside MITIGATE.
-8. High-risk production actions remain governed by MITIGATE approval and Core Protection.
-9. GitHub remains canonical; execution workspaces are disposable.
-10. Failed attempts must not contaminate the canonical repository or the next attempt.
+## 2. Current MITIGATE capability inventory
 
-## Target architecture
+| Capability | Repository evidence | Current state | Target ownership |
+|---|---|---|---|
+| Mission submission/status | MCP tools in `runtime_mcp_server.py`; request status in `production_runtime_api.py` | Exists | KEEP in Core |
+| Request API and queue enqueue | `production_request_queue_adapter.py` writes definitions before queue visibility | Exists | KEEP in Core |
+| Mission queue/worker | `mission_queue.py`, `background_worker.py` | Exists; custom | KEEP now, shrink later |
+| Runtime contract/router | `runtime_adapter.py`, `runtime_router.py` | Exists | KEEP in Core |
+| Disposable workspaces | `workspace_manager.py` creates detached worktrees and checks canonical cleanliness | Exists | KEEP policy/API |
+| Runtime branch publishing | `runtime_branch_publisher.py` commits/pushes from worktree after scope match | Exists | KEEP in Core |
+| OpenHands | `openhands_adapter.py`, `managed_openhands_adapter.py`, `external_openhands_runner.py` | Partially active | WRAP as primary coding runtime |
+| OpenClaw | `openclaw_adapter.py`, gateway verify | Selective | WRAP for tools/MCP/browser/capabilities |
+| Ruflo | `ruflo_adapter.py`, docs/evaluations, gateway verify | Benchmark-gated | WRAP diagnostic only |
+| Agent Canvas | overlay and deploy assets | UI/MCP integration | WRAP as UI/submission only |
+| MCP/tool gateway | `runtime_mcp_server_extended.py`, `runtime_gateway.py` | Exists | KEEP Core gateway, wrap tools |
+| Provider/model governance | `agent/providers/*` | Exists | KEEP in Core |
+| Memory | `project_memory_manager.py` | Exists | KEEP in Core |
+| Core Protection | `core_protection.py`, manifest | Exists | KEEP in Core |
+| Audit/evidence | execution report writer/outcome coordinator/checkpoints | Exists | KEEP in Core |
+| Upstream versions | `external-runtimes.json`, `managed-components.json`, `upstream_manager.py`, upgrade scripts | Exists | KEEP in Core |
+| Bootstrap/install | bootstrap scripts and systemd docs | Exists | KEEP in Core |
+| Legacy generic execution | `agent/ai/*`, repair loops | Exists | REPLACE/SHRINK later |
+
+Current version policy: `external-runtimes.json` pins OpenHands SDK `1.42.1`, OpenClaw `2026.7.1-2`, and Ruflo `3.38.9`, with rollback/disposable-test/no-fork policy. Runtime gateway status observed OpenClaw and Ruflo available; OpenHands is active through managed adapter/processes but is not yet surfaced in gateway `/v1/status`.
+
+## 3. Current architecture map
 
 ```text
-User / API / Scheduler
-        |
-        v
-MITIGATE Control Plane
-- mission intent
-- policy / approvals
-- project memory
-- audit / evidence
-- routing
-- GitHub truth
-        |
-        v
-MITIGATE Runtime Adapter Contract
-        |
-        +-------------------+-------------------+
-        |                   |                   |
-        v                   v                   v
-   OpenHands            OpenClaw             Ruflo
- coding/execution       tools/skills        swarm/orchestration
- sandbox/workspace      sessions/MCP        memory/coordination
- tests/refactors        integrations         optional benchmarked use
-        |
-        v
-Disposable execution workspace / worktree / sandbox
-        |
-        v
-Git branch -> validation -> MITIGATE review/approval -> merge/deploy
+User / Panel / Agent Canvas
+  -> MITIGATE MCP / production request API
+  -> mission definitions + queue in /srv/mitigate/data/runtime
+  -> background worker / runtime consolidation controller
+  -> RuntimeRouter + RuntimeAdapter contract
+  -> DisposableWorkspaceManager detached worktree
+  -> OpenHands / OpenClaw / Ruflo adapter
+  -> ExecutionEvidence
+  -> MITIGATE branch publisher / review / audit
+  -> GitHub canonical source of truth
 ```
 
-## Current MITIGATE inventory: initial classification
+Already exists: request API, queue, worker, adapter contract, OpenHands/OpenClaw/Ruflo adapters, disposable worktrees, branch publishing, MCP/gateway, provider/model governance, memory, Core Protection, audit, bootstrap, Canvas integration, managed-component update scripts. Partially implemented: full runtime selection policy, OpenHands status visibility, external-runtime compatibility/rollback verification, migration from legacy loops. Proposed: make OpenHands default for software work, OpenClaw selective capability runtime, Ruflo diagnostic-only, Canvas UI/submission only. Retire later: direct legacy canonical execution, custom generic coding/shell/file/test loops, ad hoc validation V4/self-healing patch paths, provider-specific durable mission state.
 
-| Current capability | Classification | Direction |
-|---|---|---|
-| Mission intent/schema | KEEP | MITIGATE authority |
-| Core Protection | KEEP | MITIGATE authority |
-| Approval policy | KEEP | MITIGATE authority |
-| Project memory and machine-readable handoff | KEEP | MITIGATE authority |
-| GitHub canonical history | KEEP | MITIGATE authority |
-| WordPress/Lovable/project adapters | KEEP | MITIGATE-specific |
-| Audit/evidence requirements | KEEP | Normalize external runtime results into MITIGATE evidence |
-| `MissionQueue` | KEEP TEMPORARILY | Do not expand; reassess after external durable execution is proven |
-| `ProductionMissionController` | WRAP/SHRINK | Reduce to routing/status normalization after adapter migration |
-| monolithic `mission_runner.py` generation/execution loop | REPLACE/SHRINK | Move generic coding/execution to OpenHands adapter |
-| custom code generation loop | REPLACE | OpenHands first |
-| custom shell/file editing execution | REPLACE | Sandboxed external executor |
-| custom validation retry feedback loop | WRAP/REPLACE | External executor performs task loop; MITIGATE retains acceptance policy |
-| custom self-healing implementation | SHRINK | Keep policy/evidence rules; delegate implementation repair loop |
-| branch/worktree mechanics | WRAP | Prefer executor workspace isolation plus MITIGATE Git gate |
-| generic agent skills/tool runtime | REPLACE/WRAP | OpenClaw capability surface where useful |
-| multi-agent swarm implementation | DO NOT BUILD | Benchmark Ruflo/OpenHands subagents first |
-| generic persistent session runtime | REPLACE/WRAP | OpenClaw/OpenHands capability depending use case |
-| generic scheduler/background agent loops | WRAP | Reuse maintained upstream mechanism where safe; MITIGATE retains schedule intent |
-| model/provider abstraction | WRAP | External providers may execute; MITIGATE keeps routing policy and portability |
+## 4. OpenHands capability map
 
-This table is intentionally conservative. No current production component is deleted until replacement compatibility tests pass.
+Delegate to OpenHands through MITIGATE adapter: repository coding, debugging, refactoring, dependency maintenance, test generation/execution, bounded terminal operations, file editing, software-engineering agent loop, and isolated workspace execution. Evidence: `OpenHandsRuntimeAdapter.capabilities()` advertises coding, terminal, file editing, tests, MCP, skills, multi-agent, isolated workspace, and remote execution; `_validated_workspace()` requires a disposable Git checkout and refuses the canonical repository.
 
-## OpenHands role
+Keep outside OpenHands: mission authorization, task classification, allowed/denied paths, approvals, Core Protection, persistent memory, model/provider routing, budget/usage ledger, Git commit/push/merge/deploy authority, secrets, production mutation, audit/event persistence, and rollback.
 
-Preferred first execution provider for software-engineering work.
+Role: **primary software-engineering execution provider** once health/status parity and workspace-cleanliness tests pass.
 
-Adopt for:
+## 5. OpenClaw capability map
 
-- terminal execution
-- file editing
-- repository-aware coding
-- refactoring
-- test execution
-- dependency maintenance
-- isolated/ephemeral workspaces
-- remote Agent Server execution
-- multi-step coding conversations
-- optional sub-agent workflows
+Delegate selectively: general tool orchestration, MCP/plugin/skills surfaces, browser/web operations, bounded persistent operational agents, and possible coding fallback under the same workspace/path policy. Evidence: `OpenClawRuntimeAdapter.capabilities()` advertises coding, terminal, file editing, tests, browser, MCP, skills, persistent sessions, isolated workspace, and remote execution; gateway verifies OpenClaw MCP status.
 
-MITIGATE remains responsible for:
+Keep outside OpenClaw: mission state, memory, approvals, Git/GitHub authority, secrets, deployment, unrestricted host shell, and uncontrolled plugin installation.
 
-- deciding what task is authorized
-- allowed repository/project scope
-- acceptance criteria
-- risk classification
-- final Git review and approval
-- production deployment authority
-- persistent project knowledge
+Role: **optional/selective capability runtime**, not default Core or default repository-coding authority.
 
-### Integration strategy
+## 6. Ruflo capability map
 
-Use the public OpenHands Software Agent SDK / Agent Server interfaces. Do not vendor OpenHands core logic into MITIGATE.
+Ruflo has material value today as a diagnostic/benchmark tool only. Evidence: `RufloRuntimeAdapter` advertises MCP/skills/multi-agent/persistent sessions/remote execution but blocks normal execution unless `benchmark_mode` is true, and runs `ruflo doctor --json`. Existing docs/evaluations indicate exploration, not production dependence.
 
-Initial mode: adapter + disposable coding workspace. The adapter returns a normalized `ExecutionResult` containing status, changed files, diagnostics, test evidence and external runtime metadata.
+Classification: **benchmark/diagnostic only; disabled by default for production runtime**. Adopt production multi-agent functionality only after measurable benchmark advantage over OpenHands subagents plus MITIGATE routing. Otherwise keep optional or remove.
 
-## OpenClaw role
+## 7. Agent Canvas role assessment
 
-Use selectively as an extensible agent capability layer, especially where its maintained surfaces save custom code.
+Agent Canvas should be a replaceable developer/operator UI and mission submission layer, not an execution layer. Evidence: `mitigate-runtime-overlay.js` injects MITIGATE MCP config into Canvas conversations, requests encrypted settings, and fails open so upstream Canvas is not broken. Deployment assets exist under `agent/deploy/agent-canvas/`.
 
-Candidate capabilities:
+Target role: UI/operator interface + MCP mission submission. Not Core authority, not direct execution, not persistent mission state owner.
 
-- skills
-- typed tools
-- plugin bundles
-- MCP server/client integration
-- isolated agent/session workspaces
-- cron/background capabilities
-- browser/integration tools
-- channel integrations when needed later
+## 8. KEEP/WRAP/REPLACE/DELETE matrix
 
-Security rule: do not use unsandboxed host execution as the default production execution path. Plugin code is trusted code and must be explicitly allowlisted.
+Tally: **KEEP 13, WRAP 10, REPLACE 11, DELETE 4**.
 
-Integration preference: stable skills/MCP/plugin bundle surfaces over imports from OpenClaw internals.
+| # | Subsystem | Class | Replacement/target and rationale | Prerequisite/security/rollback/reduction |
+|---:|---|---|---|---|
+| 1 | Core authority, policy, approvals | KEEP | Native MITIGATE; business-specific authority | Preserve; rollback N/A |
+| 2 | Request API, mission definitions, status | KEEP | Core-owned durable provenance | Backup `/srv/mitigate/data`; no external authority |
+| 3 | Mission queue/worker | KEEP | Keep now; shrink if durable orchestration adopted | Tests before replacement; restore queue backup |
+| 4 | Runtime adapter contract | KEEP | Provider-neutral boundary enables replaceability | Compatibility tests; adapters can be disabled |
+| 5 | Runtime selection/router | KEEP | Routing must be explicit/auditable | Encode full policy; disable provider to rollback |
+| 6 | Provider/model/budget ledger | KEEP | Core owns provider choice and cost audit | Protect secrets; revert registry config |
+| 7 | Project/business memory | KEEP | MITIGATE-specific durable knowledge | Backup and redaction policy |
+| 8 | Core Protection/path approvals | KEEP | High-risk boundary must stay Core-owned | Manual approval for protected paths |
+| 9 | Audit/evidence/reporting | KEEP | Governance and forensics | Restore reports; normalize provider metadata |
+| 10 | GitHub truth/review/merge authority | KEEP | External runtimes may propose only | Revert branch/commit; merge policy remains |
+| 11 | Runtime branch publisher | KEEP | Core-owned commit/push after scope validation | Scope tests; delete branch to rollback |
+| 12 | Bootstrap/install portability | KEEP | Fresh-server rebuild is MITIGATE-specific | Restore Git + config/secrets + data backup |
+| 13 | Project/domain adapters | KEEP | Business/project specific | Route-specific rollback |
+| 14 | OpenHands coding/debug/test/file/shell loop | WRAP | Primary external software runtime | Requires health/status and parity; disable adapter to rollback; high reduction |
+| 15 | OpenHands isolated execution | WRAP | Use MITIGATE worktree + OpenHands | Cleanliness tests; fallback legacy/OpenClaw |
+| 16 | OpenClaw MCP/tools/plugins | WRAP | Reuse maintained capability infra | Allowlist/sandbox; disable adapter; medium reduction |
+| 17 | OpenClaw browser/web | WRAP | Avoid custom browser automation | Network approval/audit; manual fallback |
+| 18 | OpenClaw persistent ops agents | WRAP | Low-risk bounded operational tasks only | Core schedule/state; disable route |
+| 19 | Ruflo doctor/benchmark | WRAP | Diagnostic and benchmark value | Keep benchmark flag; disable install/adapter |
+| 20 | Agent Canvas UI/submission | WRAP | Replaceable UI with Core MCP | Disable overlay; use API/panel |
+| 21 | MCP/tool/plugin gateway | WRAP | Core gateway wrapping tools | Auth/tool allowlist; disable tool |
+| 22 | External runtime update scripts | WRAP | Candidate-update pipeline, not production promotion | Pin rollback version; approval for breaking changes |
+| 23 | Runtime health/diagnostics | WRAP | Unified Core health over all adapters | Add OpenHands status; revert status route |
+| 24 | Custom shell execution in legacy runner | REPLACE | OpenHands/OpenClaw terminal in disposable workspace | Parity tests; no secrets/canonical access; high reduction |
+| 25 | Custom file/code generation | REPLACE | OpenHands file editor/coding loop | Changed-file evidence; fallback generator until parity |
+| 26 | Custom test/debug loop | REPLACE | OpenHands test/debug loop, Core acceptance policy | Test evidence normalization; legacy fallback |
+| 27 | Monolithic `mission_runner.py` | REPLACE | Thin controller + router + OpenHands | Representative mission parity; very high reduction |
+| 28 | Retry execution loop | REPLACE | Provider handles task iteration; Core keeps retry budget | Retry semantics tests; queue fallback |
+| 29 | Self-healing repair generation | REPLACE | Governed OpenHands repair mission | Approval/audit gates; disable self-healing route |
+| 30 | Generic browser/tool executor | REPLACE | OpenClaw/future browser runtime | Domain/network audit; manual fallback |
+| 31 | Multi-agent/swarm build | REPLACE | Ruflo/OpenHands subagents if benchmarked | Disabled by default; avoid native swarm code |
+| 32 | Generic persistent session runtime | REPLACE | External sessions wrapped by Core | Secret/memory isolation; expire sessions |
+| 33 | Generic scheduled agent loops | REPLACE | Core schedule + external execution only | Approval policy; disable timer/route |
+| 34 | Manual upstream upgrade as primary process | REPLACE | Managed compatibility pipeline using scripts | Candidate env, health, rollback; medium reduction |
+| 35 | Gateway OpenHands observability gap | REPLACE | Unified adapter health registry | Status tests; revert if needed |
+| 36 | Legacy canonical-checkout execution path | DELETE later | Disposable workspaces only | Full parity; re-enable frozen fallback; high reduction |
+| 37 | Direct Canvas execution authority | DELETE/forbid | Canvas submission only, Core executes | UI policy tests; disable overlay |
+| 38 | Runtime-specific durable mission state | DELETE/forbid | MITIGATE mission state only | Contract tests; ignore provider state |
+| 39 | Old validation V4/ad hoc patch pathway | DELETE/forbid | Consolidation phases only | Architecture approval; no rollback needed |
 
-## Ruflo role
+## 9. Dependency analysis
 
-Ruflo is optional and benchmark-gated.
+OpenHands should be a replaceable but preferred dependency for software engineering. OpenClaw should be optional/selective for tools/MCP/browser. Ruflo should be optional diagnostic/benchmark only. Agent Canvas should be replaceable UI. MCP is a Core-owned protocol boundary; individual external MCP tools remain optional. Internal Core dependencies that remain native: provider registry/ledger, memory, policies, audit, request API, queue state, bootstrap, and Git authority.
 
-Candidate capabilities:
+## 10. Portability analysis
 
-- multi-agent orchestration
-- swarm topologies
-- specialized agents
-- shared memory/coordination
-- background workers
-- MCP surface
-- cost/observability plugins
+Fresh rebuild target: GitHub checkout + secure configuration/secrets + optional `/srv/mitigate/data` restore.
 
-Do not make MITIGATE dependent on Ruflo-specific mission state or Claude-only concepts.
+| Item | GitHub | `/srv/mitigate/data` | Secret | Recreated | Backup |
+|---|---:|---:|---:|---:|---:|
+| Source, docs, tests, policies, adapters | Yes | No | No | Clone | GitHub |
+| Version manifests/examples | Yes | No | No | Clone | GitHub |
+| Real tokens/API keys | No | No; use `/etc/mitigate-ai/runtime.env` or secret store | Yes | No | Secret manager |
+| Mission queue/definitions | No | Yes | Sensitive operational data | Created by API | Yes |
+| Execution reports/checkpoints/audit | No | Yes | May be sensitive | Created during runs | Yes |
+| Disposable workspaces | No | Yes temporary | Should not persist secrets | Yes | No |
+| External runtime installs | No | `/srv/mitigate/external-runtimes` | No | Bootstrap | Optional cache |
+| Project memory | Schema/code in Git | Live memory in data/configured store | Business sensitive | No | Yes |
+| Git branches/commits | GitHub | Local clones/worktrees | No | Fetch/clone | GitHub |
 
-Adoption condition: it must demonstrate measurable value over OpenHands subagents + MITIGATE routing on representative MITIGATE workloads.
+External runtime installation requires pinned versions, Python venv, Node/npm prefix, health checks, compatibility tests, and rollback version retention. Bootstrap/systemd docs already place real secrets outside Git and bind runtime API locally by default.
 
-## Build-vs-Adopt gate
+## 11. Explicit runtime selection policy
 
-Before adding a new generic runtime component, answer:
+| Work class | Preferred | Fallback | Capabilities | Approval | Workspace | Audit |
+|---|---|---|---|---|---|---|
+| Software engineering/bugfix/repo work | OpenHands | OpenClaw, then frozen legacy only by flag | coding, terminal, editing, tests | Core scope + Core Protection | Disposable worktree | provider/model, files, tests, branch/commit |
+| MITIGATE Core modification | OpenHands | None automatic | coding/tests/protected path handling | Manual approval, full suite, recovery gate | Disposable worktree | full diff/evidence/rollback |
+| General tool orchestration | OpenClaw | Future MCP runtime | MCP/tools/skills | Tool allowlist | Isolated session/workspace | bounded tool transcript |
+| Browser/web ops | OpenClaw/future browser runtime | Manual | browser/network controls | Approval for auth/destructive actions | Browser sandbox | domains/actions/screenshots/logs |
+| Multi-agent work | Disabled; Ruflo benchmark only | OpenHands subagents if proven | multi-agent/evidence | Architecture approval | Disposable | benchmark/cost/success evidence |
+| Maintenance/dependencies | OpenHands + managed update scripts | Manual | coding/tests/health | Approval for breaking/runtime changes | Disposable compatibility workspace | versions, health, rollback |
+| Diagnostics | Core read-only + Ruflo/OpenClaw doctor | Manual | read-only status | No approval unless invasive | Usually none | timestamped health/version |
+| Scheduled jobs | Core scheduler/queue | Manual | task-specific | policy risk gate | Disposable for repo work | schedule id, mission id, result |
+| Git operations | MITIGATE Git layer | Human | git/scope validation | Core owns commit/push; merge policy | Worktree | branch, commit, diff, approval |
+| High-risk/prod mutation/deploy | MITIGATE/operator | None automatic | task-specific | Explicit approval | strongest isolation | full transcript and rollback |
 
-1. Does OpenHands already provide it?
-2. Does OpenClaw provide a stable skills/tools/plugin/MCP surface for it?
-3. Does Ruflo provide it with measurable operational advantage?
-4. Is another mature, replaceable open-source component materially better?
-5. Is the feature MITIGATE-specific enough that native implementation is justified?
+## 12. Security/approval boundary design
 
-Preferred order:
+MITIGATE owns shell grants, Git commit, Git push, merge to main, deployment, production mutation, secrets, destructive operations, external network policy, infrastructure mutation, provider/model choice, persistent memory, and audit. External runtimes execute bounded tasks inside approved workspaces/sessions and return evidence. They do not own canonical main, durable mission state, approvals, secrets, or deployment. Failover must not bypass policy, quota, credential, scope, or approval failures.
 
-`ADOPT -> WRAP -> EXTEND -> BUILD`
+## 13. Upstream update strategy
 
-## Dependency and update policy
+For OpenHands, OpenClaw, Ruflo, Agent Canvas, and MCP dependencies: pin tested versions; monitor latest separately; install candidates in isolated runtime roots; run health checks (`OpenHands adapter health`, `openclaw --version`/MCP status, `ruflo doctor --json`, Canvas UI/MCP smoke, MCP tool schema tests); run compatibility missions; preserve last-known-good versions; rollback by disabling adapter or reinstalling prior pin. Automatic update is permitted only for candidate installation and low-risk promotion after tests. Approval is required for major versions, sandbox/auth/secret/tool/browser changes, production-routing changes, or failed compatibility.
 
-For each external runtime:
+## 14. Migration sequence
 
-- pin a tested version/commit in MITIGATE compatibility metadata;
-- record upstream repository and license;
-- monitor releases separately from production rollout;
-- run compatibility tests in disposable workspace first;
-- update adapter compatibility if needed;
-- promote only a tested version;
-- preserve the last-known-good version for immediate rollback;
-- never let automatic dependency updates bypass MITIGATE approval for breaking/runtime-sensitive changes.
+1. Phase 0 evidence/policy lock: approve this report; no code deletion. Tests: doc validation/status. Rollback: revert doc. Reduction: 0.
+2. Phase 1 observability/routing policy: expose all runtime health including OpenHands and encode work-class routing. Tests: routing/failover/unit. Rollback: disable policy config. Reduction: enabling only.
+3. Phase 2 workspace cleanliness/evidence hardening: prove failed/blocked execution leaves canonical checkout clean. Tests: provider fail/block/timeout regression. Rollback: revert hardening. Reduction: 0.
+4. Phase 3 OpenHands default: route software work to managed OpenHands by default. Tests: representative docs/backend/tests/dependency/protected-path missions. Rollback: disable OpenHands adapter. Reduction: eventual 1,000-1,400 lines.
+5. Phase 4 OpenClaw selective adoption: allowlisted MCP/tool/browser routes. Tests: allowlist denial, sandbox, network audit. Rollback: disable OpenClaw route. Reduction: medium.
+6. Phase 5 retry/self-healing shrink: Core keeps budgets/policy; OpenHands performs repair missions. Tests: recovery, block, audit, chain limit. Rollback: disable self-healing route. Reduction: 500-900 lines.
+7. Phase 6 Ruflo benchmark decision: run benchmarks only. Tests: doctor, cost/latency/success comparison. Rollback: disable Ruflo. Reduction: avoids native swarm or remove small integration.
+8. Phase 7 legacy retirement: delete/shrink proven-dead generic loops. Tests: full suite, bootstrap reinstall, rollback drill. Rollback: revert retirement branch. Reduction: 1,500-2,500+ lines total.
 
-## Isolation model
+## 15. Rollback strategy
 
-Execution work must not occur directly in the canonical checkout by default.
+OpenHands: disable adapter or reinstall previous SDK pin; Core state remains. OpenClaw: disable route/gateway tool; Core state remains. Ruflo: keep benchmark flag false or uninstall; no production state loss. Agent Canvas: disable overlay/deployment and use API/panel directly. MCP tools: disable individual tools. Router policy: revert config to last-known-good. Branch publisher: disable publishing and leave changed files for review. Legacy deletion: revert Git branch or restore last-known-good Git revision. All rollbacks depend on keeping MITIGATE mission state, memory, reports, and Git authority outside external runtimes.
 
-Preferred sequence:
+## 16. Expected custom-code reduction
 
-1. Canonical `main` remains clean.
-2. Create disposable worktree/workspace/sandbox from known Git SHA.
-3. External executor works only inside that workspace.
-4. Tests and validation run there.
-5. Produce structured evidence.
-6. Commit to an isolated branch only after acceptance gates pass.
-7. MITIGATE reviews branch diff/risk.
-8. Merge/deploy according to MITIGATE policy.
-9. Destroy disposable workspace.
+Eventual reduction is qualitative high and quantitatively about **1,500-2,500+ lines** after gates pass. Main candidates: legacy mission runner (826), code generator (191), retry engine (446), autonomous controller portions (402), and repair loop/adapter (674). Queue/worker may shrink later but should remain until durable orchestration replacement is proven. Adapter/router/workspace/publisher code is not a reduction target; it is the replaceability boundary.
 
-This directly prevents failed-attempt artifacts from poisoning subsequent retries.
+## 17. Risks and unresolved questions
 
-## Phase plan
+OpenHands health is not yet visible in gateway status; queue backlog/stale-running diagnosis needs operator-safe tooling; automatic updates must mean candidate testing, not production promotion; OpenClaw plugin/browser surfaces expand attack surface; Ruflo value is unproven; Canvas fail-open behavior must not permit direct execution; provider-specific state must not become durable truth; `/srv/mitigate/data` backup/restore must be tested; historical validation V4 patching must remain frozen.
 
-### Phase 1 — Adapter foundation (NOW)
+## 18. Final recommended target architecture
 
-- define MITIGATE runtime adapter contract;
-- implement normalized execution request/result models;
-- add provider registry with no external hard dependency;
-- add capability metadata and health checks;
-- preserve current runtime unchanged.
+```text
+User / Panel / Canvas
+        ↓
+MITIGATE Core
+        ↓
+Governance / Memory / Policies / Mission State
+        ↓
+Runtime Selection
+        ↓
+Replaceable Runtime Adapters
+        ↓
+OpenHands / OpenClaw / optional Ruflo / future runtimes
+        ↓
+Disposable Workspaces / Tools
+        ↓
+MITIGATE Review / Git / Audit / Deployment Authority
+```
 
-### Phase 2 — OpenHands executor
+Invariants: MITIGATE remains usable without any single external runtime; runtimes are dependencies behind adapters, not forks; provider choice is auditable; repo work uses disposable workspaces; GitHub remains canonical; clean-repo, validation, audit, and rollback controls are preserved.
 
-- implement OpenHands adapter behind optional dependency;
-- local/disposable workspace first;
-- validate coding, tests, changed-file reporting and timeout/cancellation;
-- benchmark against current mission runner on representative tasks.
+## 19. Go / No-Go recommendation for beginning phased migration
 
-### Phase 3 — OpenClaw capability adapter
+**GO** for phases 1-2. **NO-GO** for deletion, production dependency changes, or weakening controls until OpenHands status parity, workspace-cleanliness regression, provider evidence persistence, OpenClaw sandbox/allowlist, Ruflo benchmark decision, update rollback, and fresh-server restore gates pass.
 
-- integrate only selected stable capability surfaces;
-- skills/MCP/plugin bundle preference;
-- sandbox and allowlist policy required;
-- no Core authority delegated.
+## Final mission evidence fields
 
-### Phase 4 — Ruflo benchmark
-
-- run representative multi-agent tasks;
-- measure latency, task success, recovery, cost and code-change quality;
-- adopt only the capabilities that outperform simpler architecture.
-
-### Phase 5 — Consolidation
-
-- route new coding missions through OpenHands by default;
-- shrink the custom mission runner;
-- remove redundant runtime code only after parity tests;
-- keep compatibility fallback until migration is proven.
-
-### Phase 6 — Upstream manager / self-upgrade
-
-- track approved upstream versions;
-- detect new releases;
-- create isolated compatibility test runs;
-- generate upgrade evidence;
-- low-risk approved upgrades can become autonomous according to policy;
-- breaking/security-sensitive upgrades require approval.
-
-## Immediate acceptance criteria
-
-The consolidation is successful only if:
-
-- MITIGATE remains independently usable and portable;
-- no external provider owns canonical project state;
-- OpenHands can be removed/replaced by implementing the same adapter contract;
-- OpenClaw can be disabled without breaking MITIGATE core;
-- Ruflo is optional;
-- external runtime updates remain available;
-- custom runtime code decreases rather than increases;
-- failed executions cannot dirty the canonical checkout;
-- Core Protection and approvals remain authoritative;
-- GitHub remains the canonical source of truth.
-
-## Freeze note
-
-The failed validation-evidence V3 path is not to be expanded with additional ad-hoc runtime patches during this assessment. Its failure exposed a generic execution-workspace contamination problem that this consolidation is intended to remove structurally rather than grow more custom recovery code around.
+- REQUEST_ID: active workspace request `canvas-20260814T120751Z-d0cc16`; nested submitted request `canvas-20260814T122056Z-23fb0a` was pending at last observation.
+- MISSION_ID: active workspace mission `m1786709271048027`; nested submitted mission `m1786710056746186`.
+- EXECUTION_PROVIDER: OpenHands in a MITIGATE-managed disposable workspace.
+- ASSESSMENT_FILE: `docs/architecture/runtime-consolidation-assessment.md`.
+- CURRENT_ARCHITECTURE_SUMMARY: MITIGATE Core already owns request API, queue, router, adapters, workspaces, branch publishing, memory, policy, provider abstraction, audit, bootstrap, Canvas MCP integration, and upstream metadata; consolidation is partial because legacy generic execution/retry/self-healing loops remain.
+- KEEP_COUNT: 13.
+- WRAP_COUNT: 10.
+- REPLACE_COUNT: 11.
+- DELETE_COUNT: 4.
+- OPENHANDS_ROLE: primary software-engineering executor; not authority for policy, memory, Git, approvals, secrets, or deployment.
+- OPENCLAW_ROLE: optional/selective capability runtime for tools/MCP/plugins/browser and bounded ops; possible coding fallback only under Core controls.
+- RUFLO_ROLE: optional benchmark/doctor/diagnostic runtime, disabled by default for production execution.
+- CANVAS_ROLE: replaceable developer/operator UI and mission submission layer via MITIGATE MCP; not execution authority.
+- TARGET_ARCHITECTURE: User/Panel/Canvas -> MITIGATE Core -> Governance/Memory/Policies/Mission State -> Runtime Selection -> Replaceable Runtime Adapters -> OpenHands/OpenClaw/optional Ruflo/future runtimes -> Disposable Workspaces/Tools -> MITIGATE Review/Git/Audit/Deployment Authority.
+- EXPECTED_CUSTOM_CODE_REDUCTION: roughly 1,500-2,500+ lines after parity and rollback gates.
+- MIGRATION_PHASES: 0 evidence/policy lock; 1 observability/routing; 2 cleanliness/evidence; 3 OpenHands default; 4 OpenClaw selective; 5 retry/self-healing shrink; 6 Ruflo benchmark; 7 legacy retirement.
+- ROLLBACK_READY: mostly yes architecturally; final readiness needs explicit route flags and OpenHands status parity.
+- GITHUB_BRANCH: to be supplied by MITIGATE branch publisher if Core publishes this artifact; no manual branch was created by the external runtime.
+- COMMIT: to be supplied by MITIGATE branch publisher if Core commits this artifact; no manual commit was made by the external runtime.
+- REQUEST_STATUS: active mission in progress while artifact written; nested submitted mission pending at last observed status.
+- GO_NO_GO: GO for phases 1-2 only; NO-GO for deletion/production dependency changes until gates pass.
+- RESULT: assessment artifact created; no implementation migration performed.
