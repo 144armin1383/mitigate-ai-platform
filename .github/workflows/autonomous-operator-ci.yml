@@ -8,6 +8,7 @@ on:
       - 'agent/runtime/**'
       - 'agent/web/**'
       - 'agent/bootstrap/**'
+      - 'agent/deploy/nginx/**'
       - 'agent/deploy/systemd/mitigate-ai-panel.service'
       - 'agent/maintenance/activate_isolated_mission_runtime.sh'
       - 'agent/maintenance/activate_openclaw_worker_compat.sh'
@@ -25,6 +26,7 @@ on:
       - 'agent/tests/test_mcp_read_only_classifier.py'
       - 'agent/tests/test_manual_review_status.py'
       - 'agent/tests/test_manual_review_approval.py'
+      - 'agent/tests/test_canvas_approval_integration.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
     paths:
@@ -32,6 +34,7 @@ on:
       - 'agent/runtime/**'
       - 'agent/web/**'
       - 'agent/bootstrap/**'
+      - 'agent/deploy/nginx/**'
       - 'agent/deploy/systemd/mitigate-ai-panel.service'
       - 'agent/maintenance/activate_isolated_mission_runtime.sh'
       - 'agent/maintenance/activate_openclaw_worker_compat.sh'
@@ -49,6 +52,7 @@ on:
       - 'agent/tests/test_mcp_read_only_classifier.py'
       - 'agent/tests/test_manual_review_status.py'
       - 'agent/tests/test_manual_review_approval.py'
+      - 'agent/tests/test_canvas_approval_integration.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
 permissions:
@@ -102,12 +106,14 @@ jobs:
             agent/tests/test_read_only_mission_completion.py \
             agent/tests/test_mcp_read_only_classifier.py \
             agent/tests/test_manual_review_status.py \
-            agent/tests/test_manual_review_approval.py
+            agent/tests/test_manual_review_approval.py \
+            agent/tests/test_canvas_approval_integration.py
       - name: Check shell integration
         run: |
           bash -n agent/bootstrap/configure_openhands_mcp.sh
           bash -n agent/bootstrap/enable_runtime_consolidation.sh
           bash -n agent/bootstrap/disable_runtime_consolidation.sh
+          bash -n agent/bootstrap/install_canvas_approval_integration.sh
           bash -n agent/maintenance/activate_isolated_mission_runtime.sh
           bash -n agent/maintenance/activate_openclaw_worker_compat.sh
           bash -n agent/execution/openclaw_compat_wrapper.sh
@@ -128,4 +134,5 @@ jobs:
             agent.tests.test_mcp_read_only_classifier \
             agent.tests.test_manual_review_status \
             agent.tests.test_manual_review_approval \
+            agent.tests.test_canvas_approval_integration \
             -v
