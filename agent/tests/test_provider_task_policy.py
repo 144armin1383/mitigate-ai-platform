@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from agent.execution.provider_task_policy import decide_provider, provider_contract
+from agent.runtime.workspace_production_mission_controller import WorkspaceProductionMissionController
 
 
 class ProviderTaskPolicyTests(unittest.TestCase):
@@ -35,6 +40,32 @@ class ProviderTaskPolicyTests(unittest.TestCase):
         self.assertIn("never hard-code", text)
         self.assertIn("clarification", text)
         self.assertIn("motionsites.ai", text)
+
+    def test_production_controller_registers_both_specialized_runtimes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            runtime_root = root / "external-runtimes"
+            repo.mkdir()
+            with patch.dict(
+                os.environ,
+                {
+                    "MITIGATE_AI_DATA_ROOT": str(root / "data"),
+                    "MITIGATE_EXTERNAL_RUNTIME_ROOT": str(runtime_root),
+                },
+                clear=False,
+            ):
+                controller = WorkspaceProductionMissionController(repository_root=repo)
+
+            self.assertEqual(
+                controller.router.registry.names(),
+                ("openclaw", "openhands"),
+            )
+            openclaw = controller.router.registry.get("openclaw")
+            self.assertEqual(
+                openclaw._binary,
+                str(runtime_root / "npm" / "node_modules" / ".bin" / "openclaw"),
+            )
 
 
 if __name__ == "__main__":

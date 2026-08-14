@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from agent.execution.openclaw_adapter import OpenClawRuntimeAdapter
 from agent.execution.openhands_adapter import OpenHandsRuntimeAdapter
 from agent.execution.provider_task_policy import decide_provider, provider_contract
 from agent.execution.runtime_adapter import (
@@ -63,10 +64,35 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             self.repository_root,
             workspace_parent=data_root / "runtime" / "workspaces",
         )
-        self.adapter = adapter or OpenHandsRuntimeAdapter()
+        if adapter is not None:
+            # Preserve deterministic single-adapter injection for tests and
+            # explicitly constructed controllers.
+            self.adapter = adapter
+            runtime_adapters = [adapter]
+        else:
+            # Production task specialization requires both execution runtimes
+            # to be registered. Previously only OpenHands was registered, so
+            # an explicit/runtime-policy OpenClaw route had no candidate and
+            # incorrectly ended as no_healthy_runtime_available even while the
+            # OpenClaw health probe itself was green.
+            self.adapter = OpenHandsRuntimeAdapter()
+            runtime_root = Path(
+                os.environ.get(
+                    "MITIGATE_EXTERNAL_RUNTIME_ROOT",
+                    "/srv/mitigate/external-runtimes",
+                )
+            ).expanduser().resolve()
+            openclaw_binary = os.environ.get(
+                "MITIGATE_OPENCLAW_BINARY",
+                str(runtime_root / "npm" / "node_modules" / ".bin" / "openclaw"),
+            ).strip()
+            runtime_adapters = [
+                self.adapter,
+                OpenClawRuntimeAdapter(binary=openclaw_binary),
+            ]
         self.publisher = publisher or _MissionCompatibleRuntimePublisher(self.repository_root)
         self.router = RuntimeRouter(
-            RuntimeRegistry([self.adapter]),
+            RuntimeRegistry(runtime_adapters),
             self.workspace_manager,
             publisher=self.publisher,
         )
