@@ -29,6 +29,38 @@ def _load_json(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _mission_records(queue: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize supported durable queue shapes into mission dictionaries."""
+    missions = queue.get("missions")
+
+    if isinstance(missions, list):
+        return [item for item in missions if isinstance(item, dict)]
+
+    if isinstance(missions, dict):
+        records: list[dict[str, Any]] = []
+        for mission_id, value in missions.items():
+            if not isinstance(value, dict):
+                continue
+            record = dict(value)
+            record.setdefault("id", str(mission_id))
+            records.append(record)
+        return records
+
+    # Compatibility with queue files whose top-level mapping is keyed directly
+    # by mission id. Ignore ordinary queue metadata scalars/dicts without a
+    # recognizable mission state.
+    records = []
+    for mission_id, value in queue.items():
+        if not isinstance(value, dict):
+            continue
+        if "state" not in value and "id" not in value:
+            continue
+        record = dict(value)
+        record.setdefault("id", str(mission_id))
+        records.append(record)
+    return records
+
+
 def _approval_queue_items() -> list[dict[str, Any]]:
     """Return only durable manual-review gates without scanning request history.
 
@@ -39,14 +71,10 @@ def _approval_queue_items() -> list[dict[str, Any]]:
     """
     root = _data_root() / "runtime"
     queue = _load_json(root / "missions.json")
-    missions = queue.get("missions")
-    if not isinstance(missions, list):
-        return []
+    missions = _mission_records(queue)
 
     items: list[dict[str, Any]] = []
     for mission in missions:
-        if not isinstance(mission, dict):
-            continue
         mission_id = str(mission.get("id") or "").strip()
         if (
             not _SAFE_MISSION_ID.fullmatch(mission_id)
