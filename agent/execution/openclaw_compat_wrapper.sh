@@ -4,6 +4,11 @@ set -Eeuo pipefail
 REAL_BINARY="${MITIGATE_OPENCLAW_REAL_BINARY:-/srv/mitigate/external-runtimes/npm/node_modules/.bin/openclaw}"
 WORKSPACE_ROOT="${MITIGATE_WORKSPACE_ROOT:-/srv/mitigate/data/runtime/workspaces}"
 
+if [[ "${MITIGATE_OPENCLAW_CODING_DISABLED:-0}" == "1" ]]; then
+  echo "MITIGATE_OPENCLAW_CODING_DISABLED" >&2
+  exit 64
+fi
+
 [[ -x "$REAL_BINARY" ]] || {
   echo "openclaw real binary unavailable" >&2
   exit 127
@@ -15,12 +20,8 @@ supports_agent_exec() {
   [[ "$help" == *"--message-file"* && "$help" == *"--cwd"* ]]
 }
 
-# The MITIGATE adapter healthcheck currently invokes --version. Make that
-# healthcheck capability-aware: OpenClaw is a coding provider only when the
-# installed CLI really exposes the agent-exec contract MITIGATE requires.
 if [[ $# -eq 1 && "$1" == "--version" ]]; then
   if ! supports_agent_exec; then
-    "$REAL_BINARY" --version || true
     echo "MITIGATE_OPENCLAW_AGENT_EXEC_UNSUPPORTED" >&2
     exit 64
   fi
