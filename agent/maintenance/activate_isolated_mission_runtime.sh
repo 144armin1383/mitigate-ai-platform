@@ -68,9 +68,10 @@ fi
 
 OPENCLAW_BINARY="${MITIGATE_OPENCLAW_BINARY:-/srv/mitigate/external-runtimes/npm/node_modules/.bin/openclaw}"
 OPENCLAW_OK=0
-if [[ -x "$OPENCLAW_BINARY" ]] && "$OPENCLAW_BINARY" agent exec --help >/dev/null 2>&1; then
+if [[ -x "$OPENCLAW_BINARY" ]] && NODE_OPTIONS=--jitless "$OPENCLAW_BINARY" agent exec --help >/dev/null 2>&1; then
   OPENCLAW_OK=1
   echo "MANAGED_OPENCLAW_AGENT_EXEC=OK"
+  echo "MANAGED_OPENCLAW_JITLESS=OK"
 else
   echo "MANAGED_OPENCLAW_AGENT_EXEC=UNAVAILABLE"
 fi
@@ -148,6 +149,7 @@ WorkingDirectory=/srv/mitigate/mitigate-ai-platform
 EnvironmentFile=/etc/mitigate-ai/runtime.env
 Environment="OPENCLAW_HOME=/srv/mitigate/data/openclaw"
 Environment="OPENCLAW_STATE_DIR=/srv/mitigate/data/openclaw"
+Environment="NODE_OPTIONS=--jitless"
 Environment="GIT_SSH_COMMAND=ssh -F /etc/mitigate-ai/ssh/config"
 Environment="MITIGATE_AI_MISSION_DEFINITION_ROOT=/srv/mitigate/data/runtime/mission-definitions"
 Environment="MITIGATE_AI_AUTONOMOUS_MAX_RETRIES=2"
@@ -220,6 +222,7 @@ echo "MITIGATE_RECOVERY_CHAIN_LIMIT=2"
 echo "MITIGATE_GIT_DIAGNOSTICS_WARNING_ISOLATION=ACTIVE"
 echo "MITIGATE_OPENHANDS_DISPOSABLE_CWD=ACTIVE"
 echo "MITIGATE_OPENCLAW_CODING_FALLBACK=ACTIVE"
+echo "MITIGATE_OPENCLAW_JITLESS=ACTIVE"
 echo "MITIGATE_PROVIDER_FAILOVER=openhands->openclaw"
 echo "MITIGATE_PROVIDER_FAILOVER_ROUTER=ACTIVE"
 echo "MITIGATE_FAILURE_EVIDENCE=ACTIVE"
