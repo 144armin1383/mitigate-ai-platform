@@ -39,18 +39,7 @@ class ManagedOpenHandsProcessError(RuntimeError):
 
 
 class ExternalOpenHandsRunner:
-    """Run OpenHands from its managed external venv in a disposable worktree.
-
-    The subprocess working directory is always the MITIGATE-provided disposable
-    workspace. Canonical main is used only as the immutable location of this
-    small runner script; it is never the external provider's working directory.
-
-    The child Python environment is explicitly normalized to the managed
-    OpenHands virtual environment. The configured venv interpreter path must
-    retain its venv-facing symlink path: resolving ``venv/bin/python`` to the
-    underlying system interpreter destroys Python's pyvenv.cfg discovery and
-    makes ``sys.prefix`` fall back to /usr.
-    """
+    """Run OpenHands from its managed external venv in a disposable worktree."""
 
     def __init__(
         self,
@@ -64,10 +53,8 @@ class ExternalOpenHandsRunner:
             or os.environ.get("MITIGATE_OPENHANDS_PYTHON")
             or "/srv/mitigate/external-runtimes/venv/bin/python"
         ).strip()
-        # CRITICAL: do not call Path.resolve() here. A normal Python virtualenv
-        # uses bin/python -> /usr/bin/pythonX.Y. Resolving the symlink before
-        # exec makes CPython start as the system interpreter and ignore the
-        # virtualenv's pyvenv.cfg/site-packages.
+        # Preserve the venv-facing symlink path. Resolving bin/python to the
+        # system interpreter prevents CPython from discovering pyvenv.cfg.
         expanded_python = Path(configured).expanduser()
         self.python_path = Path(os.path.abspath(str(expanded_python)))
         self.runner_script = (
@@ -92,9 +79,6 @@ class ExternalOpenHandsRunner:
         return resolved
 
     def _venv_root(self) -> Path:
-        # Derive from the preserved venv-facing interpreter path. Resolving the
-        # root itself is safe because the virtualenv directory is not the
-        # interpreter symlink and keeps the pyvenv.cfg location intact.
         return self.python_path.parent.parent.absolute()
 
     def _managed_site_packages(self) -> tuple[Path, ...]:
@@ -108,7 +92,6 @@ class ExternalOpenHandsRunner:
 
     def _subprocess_env(self) -> dict[str, str]:
         env = dict(os.environ)
-
         for key in (
             "PYTHONHOME",
             "PYTHONPATH",
@@ -133,15 +116,27 @@ class ExternalOpenHandsRunner:
         env["GIT_OPTIONAL_LOCKS"] = "0"
         return env
 
-    def _preflight(self, *, workspace: Path, env: dict[str, str], timeout: int) -> dict[str, Any]:
+    def _preflight(
+        self,
+        *,
+        workspace: Path,
+        env: dict[str, str],
+        timeout: int,
+    ) -> dict[str, Any]:
+        # `openhands` is a namespace package in the SDK distribution, so
+        # find_spec("openhands").origin may legitimately be None. Validate the
+        # concrete public SDK module instead; this mirrors the production import
+        # used by openhands_subprocess_runner.py.
         probe = (
             "import importlib.util,json,site,sys;"
+            "sdk=importlib.util.find_spec('openhands.sdk');"
             "print(json.dumps({"
             "'executable':sys.executable,"
             "'prefix':sys.prefix,"
             "'base_prefix':sys.base_prefix,"
             "'sitepackages':site.getsitepackages(),"
-            "'openhands_spec':getattr(importlib.util.find_spec('openhands'),'origin',None)"
+            "'openhands_sdk_spec':getattr(sdk,'origin',None),"
+            "'openhands_sdk_available':sdk is not None"
             "}))"
         )
         try:
@@ -171,7 +166,7 @@ class ExternalOpenHandsRunner:
             except (ValueError, IndexError):
                 payload = {}
 
-        if proc.returncode != 0 or not payload.get("openhands_spec"):
+        if proc.returncode != 0 or not payload.get("openhands_sdk_available"):
             detail = json.dumps(payload, sort_keys=True) if payload else stdout
             raise ManagedOpenHandsProcessError(
                 "managed_openhands_runtime_incompatible",
