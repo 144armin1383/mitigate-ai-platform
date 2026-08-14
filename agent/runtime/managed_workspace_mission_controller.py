@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.execution.managed_openhands_adapter import ManagedOpenHandsRuntimeAdapter
+from agent.execution.openclaw_adapter import OpenClawRuntimeAdapter
 from agent.runtime.workspace_production_mission_controller import WorkspaceProductionMissionController
 
 
@@ -29,6 +30,13 @@ class ManagedWorkspaceMissionController(WorkspaceProductionMissionController):
             timeout_seconds=timeout_seconds,
             adapter=ManagedOpenHandsRuntimeAdapter(repository_root=root),
             review_callback=review_callback,
+        )
+        openclaw_binary = os.environ.get(
+            "MITIGATE_OPENCLAW_BINARY",
+            "/srv/mitigate/external-runtimes/npm/node_modules/.bin/openclaw",
+        ).strip()
+        self.router.registry.register(
+            OpenClawRuntimeAdapter(binary=openclaw_binary or "openclaw")
         )
 
     @staticmethod
@@ -143,8 +151,6 @@ class ManagedWorkspaceMissionController(WorkspaceProductionMissionController):
         try:
             self._persist_failure_evidence(mission=mission, result=result)
         except Exception as exc:
-            # Evidence persistence is fail-soft for mission authority, but its
-            # failure is still visible in the controller result/checkpoint path.
             result["failure_evidence_error"] = type(exc).__name__
 
         return result
