@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -95,9 +97,6 @@ class ExternalOpenHandsRunner:
         env["PYTHONNOUSERSITE"] = "1"
         env["OPENHANDS_SUPPRESS_BANNER"] = "1"
 
-        # ProtectHome=true intentionally makes /home/ubuntu unavailable to the
-        # worker. Keep production OpenHands state isolated from Agent Canvas,
-        # which uses a separate persistent tree owned by its container UID.
         env["HOME"] = str(self.state_root)
         env["XDG_CONFIG_HOME"] = str(self.state_root / ".config")
         env["XDG_CACHE_HOME"] = str(self.state_root / ".cache")
@@ -144,6 +143,86 @@ class ExternalOpenHandsRunner:
             raise ManagedOpenHandsProcessError("managed_openhands_runtime_incompatible", returncode=proc.returncode, stdout=detail, stderr=stderr)
         return payload
 
+    @staticmethod
+    def _workspace_processes(workspace: Path) -> list[int]:
+        marker = str(workspace).encode()
+        own_pid = os.getpid()
+        uid = os.getuid()
+        matches: list[int] = []
+        proc_root = Path("/proc")
+        if not proc_root.is_dir():
+            return matches
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == own_pid:
+                continue
+            try:
+                if entry.stat().st_uid != uid:
+                    continue
+                cmdline = (entry / "cmdline").read_bytes()
+            except OSError:
+                continue
+            if marker and marker in cmdline:
+                matches.append(pid)
+        return matches
+
+    @classmethod
+    def _terminate_workspace_processes(cls, workspace: Path) -> None:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            pids = cls._workspace_processes(workspace)
+            if not pids:
+                return
+            for pid in pids:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    pass
+            if sig == signal.SIGTERM:
+                deadline = time.monotonic() + 3.0
+                while time.monotonic() < deadline:
+                    if not cls._workspace_processes(workspace):
+                        return
+                    time.sleep(0.1)
+
+    def _run_agent(self, *, workspace: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+        command = [str(self.python_path), str(self.runner_script), "--workspace", str(workspace)]
+        try:
+            proc = subprocess.Popen(
+                command,
+                cwd=workspace,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise ManagedOpenHandsProcessError("managed_openhands_process_start_failed", stderr=str(exc)) from exc
+
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                proc.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                proc.communicate()
+            self._terminate_workspace_processes(workspace)
+            raise TimeoutError("managed_openhands_timeout") from exc
+
+        return subprocess.CompletedProcess(command, proc.returncode, stdout or "", stderr or "")
+
     def __call__(self, *, request: ExecutionRequest, workspace: Path) -> Any:
         if not self.available():
             raise ManagedOpenHandsProcessError("managed_openhands_runtime_unavailable")
@@ -161,13 +240,7 @@ class ExternalOpenHandsRunner:
         env["MITIGATE_OPENHANDS_REQUEST_JSON"] = json.dumps(payload, separators=(",", ":"))
         timeout = max(30, int(request.timeout_seconds))
         preflight = self._preflight(workspace=workspace, env=env, timeout=timeout)
-
-        try:
-            proc = subprocess.run([str(self.python_path), str(self.runner_script), "--workspace", str(workspace)], cwd=workspace, env=env, text=True, capture_output=True, timeout=timeout, check=False)
-        except subprocess.TimeoutExpired as exc:
-            raise TimeoutError("managed_openhands_timeout") from exc
-        except OSError as exc:
-            raise ManagedOpenHandsProcessError("managed_openhands_process_start_failed", stderr=str(exc)) from exc
+        proc = self._run_agent(workspace=workspace, env=env, timeout=timeout)
 
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
