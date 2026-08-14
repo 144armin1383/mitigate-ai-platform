@@ -11,6 +11,7 @@ on:
       - 'agent/tests/test_isolated_mission_runtime.py'
       - 'agent/tests/test_autonomous_operator_runtime.py'
       - 'agent/tests/test_host_recovery_supervisor.py'
+      - 'agent/tests/test_mission_diagnostics_git_warnings.py'
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
@@ -22,6 +23,7 @@ on:
       - 'agent/tests/test_isolated_mission_runtime.py'
       - 'agent/tests/test_autonomous_operator_runtime.py'
       - 'agent/tests/test_host_recovery_supervisor.py'
+      - 'agent/tests/test_mission_diagnostics_git_warnings.py'
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
@@ -58,6 +60,7 @@ jobs:
             agent/tests/test_isolated_mission_runtime.py \
             agent/tests/test_autonomous_operator_runtime.py \
             agent/tests/test_host_recovery_supervisor.py \
+            agent/tests/test_mission_diagnostics_git_warnings.py \
             agent/tests/test_runtime_consolidation_controller.py
       - name: Check shell integration
         run: |
@@ -71,5 +74,6 @@ jobs:
             agent.tests.test_isolated_mission_runtime \
             agent.tests.test_autonomous_operator_runtime \
             agent.tests.test_host_recovery_supervisor \
+            agent.tests.test_mission_diagnostics_git_warnings \
             agent.tests.test_runtime_consolidation_controller \
             -v
