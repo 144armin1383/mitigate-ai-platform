@@ -6,6 +6,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agent.runtime.manual_review_approval import (
+    ManualReviewApprovalService,
+)
 from agent.runtime.production_runtime_api import ProductionRuntimeFacade
 
 
@@ -85,7 +88,7 @@ def normalize_request_status(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class ManualReviewAwareProductionRuntimeFacade(ProductionRuntimeFacade):
-    """Production facade with truthful public manual-review status semantics."""
+    """Production facade with truthful manual-review and approval semantics."""
 
     def get_mission(self, mission_id: str) -> dict[str, Any]:
         return normalize_mission_status(super().get_mission(mission_id))
@@ -104,3 +107,28 @@ class ManualReviewAwareProductionRuntimeFacade(ProductionRuntimeFacade):
                 for item in items
             ]
         return result
+
+    def process_execution_outcome(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Handle the bounded human approval action exposed by the panel.
+
+        RuntimePrivateAPI already authenticates this endpoint. The panel adds the
+        authenticated panel username server-side, so the browser cannot choose
+        an arbitrary approver identity.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_execution_outcome")
+        action = str(payload.get("action") or "").strip().lower()
+        if action != "approve_manual_review":
+            raise ValueError("invalid_execution_outcome")
+        mission_id = str(payload.get("mission_id") or "").strip()
+        approved_by = str(payload.get("approved_by") or "").strip()
+        if self._queue is None:
+            raise RuntimeError("queue_resolution_failed")
+
+        service = ManualReviewApprovalService(
+            queue=self._queue,
+        )
+        return service.approve(
+            mission_id,
+            approved_by=approved_by,
+        )
