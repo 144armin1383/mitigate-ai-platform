@@ -19,24 +19,39 @@ def _safe_id(value: str, field: str) -> str:
 
 
 def _git(repo: Path, *args: str) -> dict[str, Any]:
+    """Run a read-only Git probe with deterministic user/global configuration.
+
+    Successful porcelain output is always taken from stdout only. Git warnings
+    are retained separately as bounded diagnostic metadata and can never become
+    repository status entries.
+    """
+    env = os.environ.copy()
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+
     try:
         result = subprocess.run(
-            ["git", *args],
+            ["git", "-c", f"core.excludesFile={os.devnull}", *args],
             cwd=repo,
             text=True,
             capture_output=True,
             timeout=10,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return {"ok": False, "output": "git_probe_failed"}
+        return {
+            "ok": False,
+            "output": "",
+            "warning": "git_probe_failed",
+        }
 
-    output = (result.stdout or "").strip()
-    if not output:
-        output = (result.stderr or "").strip()
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
     return {
         "ok": result.returncode == 0,
-        "output": output[:12000],
+        "output": stdout[:12000],
+        "warning": stderr[:4000] if stderr else "",
     }
 
 
@@ -196,6 +211,11 @@ def collect_mission_diagnostics(
 
     porcelain_output = str(porcelain.get("output") or "")
     clean = bool(porcelain.get("ok")) and not porcelain_output.strip()
+    git_warnings = [
+        str(item.get("warning") or "")
+        for item in (branch, porcelain, head, branches)
+        if str(item.get("warning") or "").strip()
+    ]
 
     return {
         "mission_id": mission_id,
@@ -206,6 +226,7 @@ def collect_mission_diagnostics(
             "head": head.get("output") if head.get("ok") else None,
             "clean": clean,
             "dirty_entries": _dirty_entries(porcelain_output),
+            "git_warnings": git_warnings[:10],
             "mission_branches": branch_matches,
         },
         "mission_artifact": _mission_metadata(repo, mission_id),
