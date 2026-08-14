@@ -11,7 +11,7 @@ _SAFE_MISSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$")
 
 
 class ApprovalPanelServer(base.PanelServer):
-    """Loopback-only Canvas API with governed manual-approval action."""
+    """Loopback-only Canvas API with governed manual-review actions."""
 
     def handler(self):
         parent = super().handler()
@@ -29,7 +29,7 @@ class ApprovalPanelServer(base.PanelServer):
                     len(parts) == 4
                     and parts[0] == "api"
                     and parts[1] == "missions"
-                    and parts[3] == "approve"
+                    and parts[3] in {"approve", "reject"}
                 ):
                     if not self._require_auth():
                         return
@@ -46,14 +46,23 @@ class ApprovalPanelServer(base.PanelServer):
                             },
                         )
                         return
-                    self._proxy(
-                        "/v1/execution-outcomes",
-                        method="POST",
-                        payload={
+                    decision = parts[3]
+                    if decision == "approve":
+                        payload = {
                             "action": "approve_manual_review",
                             "mission_id": mission_id,
                             "approved_by": outer.config.username,
-                        },
+                        }
+                    else:
+                        payload = {
+                            "action": "reject_manual_review",
+                            "mission_id": mission_id,
+                            "rejected_by": outer.config.username,
+                        }
+                    self._proxy(
+                        "/v1/execution-outcomes",
+                        method="POST",
+                        payload=payload,
                     )
                     return
                 super().do_POST()
