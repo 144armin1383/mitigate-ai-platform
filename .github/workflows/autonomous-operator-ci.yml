@@ -50,12 +50,14 @@ jobs:
           python -m py_compile \
             agent/execution/external_openhands_runner.py \
             agent/execution/managed_openhands_adapter.py \
+            agent/execution/openclaw_adapter.py \
             agent/runtime/autonomous_mission_queue.py \
             agent/runtime/autonomous_mission_diagnostics.py \
             agent/runtime/host_recovery_supervisor.py \
             agent/runtime/mission_diagnostics.py \
             agent/runtime/task_scope_workspace_controller.py \
             agent/runtime/managed_workspace_mission_controller.py \
+            agent/runtime/workspace_production_mission_controller.py \
             agent/runtime/production_runtime_api_isolated.py \
             agent/runtime/runtime_consolidation_controller.py \
             agent/runtime/runtime_mcp_server_extended.py \
