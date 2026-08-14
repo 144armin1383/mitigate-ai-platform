@@ -27,21 +27,31 @@ python3 -m py_compile \
   agent/runtime/workspace_worker_entrypoint.py \
   agent/execution/external_openhands_runner.py \
   agent/execution/managed_openhands_adapter.py \
+  agent/execution/openhands_subprocess_runner.py \
   agent/runtime/runtime_mcp_server_extended.py \
   agent/tests/test_isolated_mission_runtime.py \
   agent/tests/test_autonomous_operator_runtime.py \
   agent/tests/test_host_recovery_supervisor.py \
-  agent/tests/test_mission_diagnostics_git_warnings.py
+  agent/tests/test_mission_diagnostics_git_warnings.py \
+  agent/tests/test_runtime_execution_observability.py
 
 "$ROOT/agent/.venv/bin/python" -m unittest \
   agent.tests.test_isolated_mission_runtime \
   agent.tests.test_autonomous_operator_runtime \
   agent.tests.test_host_recovery_supervisor \
-  agent.tests.test_mission_diagnostics_git_warnings -v
+  agent.tests.test_mission_diagnostics_git_warnings \
+  agent.tests.test_runtime_execution_observability -v
 
 OPENHANDS_PYTHON="${MITIGATE_OPENHANDS_PYTHON:-/srv/mitigate/external-runtimes/venv/bin/python}"
 test -x "$OPENHANDS_PYTHON"
-"$OPENHANDS_PYTHON" -c 'import openhands.sdk; print("MANAGED_OPENHANDS_IMPORT=OK")'
+"$OPENHANDS_PYTHON" - <<'PY'
+from openhands.sdk import Agent, Conversation, LLM, Tool
+from openhands.tools.file_editor import FileEditorTool
+from openhands.tools.task_tracker import TaskTrackerTool
+from openhands.tools.terminal import TerminalTool
+print("MANAGED_OPENHANDS_API_IMPORTS=OK")
+print("MANAGED_OPENHANDS_TOOL_IMPORTS=OK")
+PY
 
 install -d -m 0700 "$BACKUP_DIR"
 cp -a "$API_UNIT" "$BACKUP_DIR/" 2>/dev/null || true
@@ -178,6 +188,9 @@ echo "MITIGATE_AUTONOMOUS_OPERATOR=ACTIVE"
 echo "MITIGATE_HOST_RECOVERY_SUPERVISOR=ACTIVE"
 echo "MITIGATE_RECOVERY_CHAIN_LIMIT=2"
 echo "MITIGATE_GIT_DIAGNOSTICS_WARNING_ISOLATION=ACTIVE"
+echo "MITIGATE_OPENHANDS_DISPOSABLE_CWD=ACTIVE"
+echo "MITIGATE_FAILURE_EVIDENCE=ACTIVE"
+echo "MITIGATE_INTENT_CLASSIFIER_V2=ACTIVE"
 echo "SYSTEMD_BACKUP_DIR=$BACKUP_DIR"
 echo "GIT_STATUS_BEGIN"
 git status --short
