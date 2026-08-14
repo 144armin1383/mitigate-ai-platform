@@ -156,24 +156,6 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             "provider_metadata": dict(evidence.provider_metadata or {}),
         }
 
-    @staticmethod
-    def _should_fallback_from_openhands(result: Any) -> bool:
-        if str(getattr(result, "provider", "")).lower() != "openhands":
-            return False
-        reason = str(getattr(result, "reason", "") or "").lower()
-        status = getattr(result, "status", None)
-        markers = (
-            "managed_openhands_runtime_incompatible",
-            "managed_openhands_runtime_unavailable",
-            "managed_openhands_process_start_failed",
-            "managed_openhands_permission_denied",
-            "managed_openhands_workspace_unavailable",
-        )
-        return (
-            status in {RuntimeStatus.failed, RuntimeStatus.unavailable}
-            and any(marker in reason for marker in markers)
-        )
-
     def execute(self, mission: dict[str, Any]) -> dict[str, Any]:
         try:
             mission_name = self._mission_name(mission)
@@ -233,32 +215,15 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             isolated_workspace=True,
         )
 
+        # RuntimeRouter owns provider ordering, health checks, per-provider
+        # disposable workspaces and bounded failover. Mission controllers never
+        # resubmit directly to a provider or duplicate provider-selection logic.
         result = self.router.execute(
             request,
             require=requirements,
-            preferred=("openhands",),
+            preferred=("openhands", "openclaw"),
         )
-        fallback_evidence: dict[str, Any] | None = None
-        if self._should_fallback_from_openhands(result) and "openclaw" in self.router.registry.names():
-            fallback_evidence = {
-                "provider": result.provider,
-                "status": result.status.value,
-                "reason": result.reason,
-                "evidence": self._runtime_evidence(result),
-            }
-            result = self.router.execute(
-                request,
-                require=requirements,
-                preferred=("openclaw",),
-            )
-
         runtime_evidence = self._runtime_evidence(result)
-        if fallback_evidence is not None:
-            runtime_evidence["provider_fallback"] = {
-                "from": "openhands",
-                "to": result.provider,
-                "primary_failure": fallback_evidence,
-            }
 
         if result.status == RuntimeStatus.succeeded:
             if not result.evidence.changed_files:
