@@ -35,12 +35,7 @@ class _MissionCompatibleRuntimePublisher(RuntimeBranchPublisher):
 
 
 class WorkspaceProductionMissionController(ProductionMissionController):
-    """Production controller using replaceable runtimes in disposable worktrees.
-
-    MITIGATE keeps mission state, policy, Git review and merge authority. OpenHands
-    receives only a disposable worktree. Runtime-generated mission definitions are
-    read from the durable runtime data root and never need to dirty canonical main.
-    """
+    """Production controller using replaceable runtimes in disposable worktrees."""
 
     def __init__(
         self,
@@ -52,41 +47,24 @@ class WorkspaceProductionMissionController(ProductionMissionController):
         publisher: Any | None = None,
         review_callback: Any | None = None,
     ) -> None:
-        super().__init__(
-            repository_root=repository_root,
-            timeout_seconds=timeout_seconds,
-        )
-
+        super().__init__(repository_root=repository_root, timeout_seconds=timeout_seconds)
         data_root = Path(
-            os.environ.get(
-                "MITIGATE_AI_DATA_ROOT",
-                "/srv/mitigate/data",
-            )
+            os.environ.get("MITIGATE_AI_DATA_ROOT", "/srv/mitigate/data")
         ).expanduser().resolve()
-
         configured_definitions = os.environ.get(
-            "MITIGATE_AI_MISSION_DEFINITION_ROOT",
-            "",
+            "MITIGATE_AI_MISSION_DEFINITION_ROOT", ""
         ).strip()
         self.definition_root = (
             Path(configured_definitions).expanduser().resolve()
             if configured_definitions
             else data_root / "runtime" / "mission-definitions"
         )
-
-        self.workspace_manager = (
-            workspace_manager
-            or DisposableWorkspaceManager(
-                self.repository_root,
-                workspace_parent=(
-                    data_root / "runtime" / "workspaces"
-                ),
-            )
+        self.workspace_manager = workspace_manager or DisposableWorkspaceManager(
+            self.repository_root,
+            workspace_parent=data_root / "runtime" / "workspaces",
         )
         self.adapter = adapter or OpenHandsRuntimeAdapter()
-        self.publisher = publisher or _MissionCompatibleRuntimePublisher(
-            self.repository_root
-        )
+        self.publisher = publisher or _MissionCompatibleRuntimePublisher(self.repository_root)
         self.router = RuntimeRouter(
             RuntimeRegistry([self.adapter]),
             self.workspace_manager,
@@ -114,9 +92,7 @@ class WorkspaceProductionMissionController(ProductionMissionController):
     @staticmethod
     def _context(text: str) -> Mapping[str, Any]:
         match = re.search(
-            r"## Context\s*\n\s*```json\s*\n(.*?)\n```",
-            text,
-            re.DOTALL,
+            r"## Context\s*\n\s*```json\s*\n(.*?)\n```", text, re.DOTALL
         )
         if not match:
             return {}
@@ -129,18 +105,14 @@ class WorkspaceProductionMissionController(ProductionMissionController):
     @staticmethod
     def _field(text: str, label: str) -> str:
         match = re.search(
-            rf"^{re.escape(label)}:\s*(.+?)\s*$",
-            text,
-            re.MULTILINE,
+            rf"^{re.escape(label)}:\s*(.+?)\s*$", text, re.MULTILINE
         )
         return match.group(1).strip() if match else ""
 
     @staticmethod
     def _objective(text: str) -> str:
         match = re.search(
-            r"## Objective\s*\n\s*(.*?)(?=\n## |\Z)",
-            text,
-            re.DOTALL,
+            r"## Objective\s*\n\s*(.*?)(?=\n## |\Z)", text, re.DOTALL
         )
         return match.group(1).strip() if match else text[:12000]
 
@@ -149,7 +121,6 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             text = self._read_definition(mission_name)
         except ValueError:
             return super()._mission_metadata(mission_name)
-
         metadata: dict[str, Any] = {}
         task_type = self._field(text, "Task Type")
         request_id = self._field(text, "Request ID")
@@ -159,18 +130,42 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             metadata["request_id"] = request_id
         return metadata
 
+    @staticmethod
+    def _default_allowed_paths(task_type: str, objective: str) -> tuple[str, ...]:
+        if task_type == "documentation" or any(
+            marker in objective.lower()
+            for marker in ("architecture assessment", "build-vs-adopt assessment", "assessment document")
+        ):
+            return ("docs", "README.md")
+        if task_type == "github":
+            return (".github", "agent", "docs")
+        if task_type in {"infrastructure", "deployment"}:
+            return ("agent", ".github", "docs")
+        return ("agent",)
+
+    @staticmethod
+    def _runtime_evidence(result: Any) -> dict[str, Any]:
+        evidence = result.evidence
+        return {
+            "summary": str(evidence.summary or "")[:2000],
+            "diagnostics": list(evidence.diagnostics)[:50],
+            "tests_run": list(evidence.tests_run)[:50],
+            "test_results": list(evidence.test_results)[:50],
+            "changed_files": list(evidence.changed_files)[:200],
+            "provider_run_id": evidence.provider_run_id,
+            "provider_metadata": dict(evidence.provider_metadata or {}),
+        }
+
     def execute(self, mission: dict[str, Any]) -> dict[str, Any]:
         try:
             mission_name = self._mission_name(mission)
             text = self._read_definition(mission_name)
         except ValueError as exc:
-            return {
-                "status": "blocked",
-                "reason": str(exc),
-            }
+            return {"status": "blocked", "reason": str(exc)}
 
         metadata = self._mission_metadata(mission_name)
         context = dict(self._context(text))
+        objective = self._objective(text)
         deliverables_raw = context.get("deliverables", [])
         deliverables = tuple(
             str(item).strip()
@@ -182,34 +177,24 @@ class WorkspaceProductionMissionController(ProductionMissionController):
         software_task = task_type in {
             "backend", "frontend", "api", "testing", "documentation",
             "infrastructure", "security", "database", "fullstack",
-            "bugfix", "maintenance", "refactor", "test", "tests",
+            "bugfix", "maintenance", "refactor", "test", "tests", "github",
+            "deployment",
         }
-
         allowed_paths = deliverables
         if software_task and not allowed_paths:
-            # The runtime still cannot touch outside the MITIGATE application tree.
-            # More specific planner deliverables take precedence whenever present.
-            allowed_paths = ("agent",)
+            allowed_paths = self._default_allowed_paths(task_type, objective)
 
-        base_revision = "main"
         request_id = str(
-            metadata.get("request_id")
-            or context.get("request_id")
-            or mission_name
+            metadata.get("request_id") or context.get("request_id") or mission_name
         ).strip()
-
         request = ExecutionRequest(
             request_id=request_id,
             mission_id=mission_name,
-            objective=self._objective(text),
+            objective=objective,
             repository_root=str(self.repository_root),
-            base_revision=base_revision,
+            base_revision="main",
             allowed_paths=allowed_paths,
-            denied_paths=(
-                ".git",
-                ".env",
-                "secrets",
-            ),
+            denied_paths=(".git", ".env", "secrets"),
             acceptance_criteria=(
                 "Inspect the existing repository before modifying files.",
                 "Implement the smallest architecture-consistent fix.",
@@ -219,10 +204,7 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             timeout_seconds=self.timeout_seconds,
             metadata={
                 "task_type": task_type,
-                "model": os.environ.get(
-                    "MITIGATE_OPENHANDS_MODEL",
-                    "gpt-5.5",
-                ),
+                "model": os.environ.get("MITIGATE_OPENHANDS_MODEL", "gpt-5.5"),
             },
         )
 
@@ -237,6 +219,7 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             ),
             preferred=("openhands",),
         )
+        runtime_evidence = self._runtime_evidence(result)
 
         if result.status == RuntimeStatus.succeeded:
             if not result.evidence.changed_files:
@@ -244,8 +227,10 @@ class WorkspaceProductionMissionController(ProductionMissionController):
                     "status": "blocked",
                     "reason": "runtime_produced_no_changes",
                     "provider": result.provider,
+                    "request_id": request_id,
+                    "task_type": task_type,
+                    "runtime_evidence": runtime_evidence,
                 }
-
             review = (
                 self.review_callback(mission_name)
                 if self.review_callback is not None
@@ -256,6 +241,7 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             review["runtime_commit"] = result.evidence.commit_sha
             review["request_id"] = request_id
             review["task_type"] = task_type
+            review["runtime_evidence"] = runtime_evidence
             return review
 
         if result.status == RuntimeStatus.blocked:
@@ -273,6 +259,9 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             "provider": result.provider,
             "request_id": request_id,
             "task_type": task_type,
+            "runtime_status": result.status.value,
+            "runtime_retryable": bool(result.retryable),
+            "runtime_evidence": runtime_evidence,
         }
 
 
