@@ -17,20 +17,33 @@ fi
 supports_agent_exec() {
   local help
   help="$($REAL_BINARY agent exec --help 2>&1 || true)"
-  [[ "$help" == *"--message-file"* && "$help" == *"--cwd"* ]]
+  [[ "$help" == *"--message-file"* && "$help" == *"--cwd"* && "$help" == *"--json"* ]]
+}
+
+supports_agent_local() {
+  local help
+  help="$($REAL_BINARY agent --help 2>&1 || true)"
+  [[ "$help" == *"--message-file"* && "$help" == *"--local"* && "$help" == *"--session-key"* && "$help" == *"--json"* ]]
+}
+
+execution_mode() {
+  if supports_agent_exec; then
+    printf '%s\n' "agent-exec"
+    return 0
+  fi
+  if supports_agent_local; then
+    printf '%s\n' "agent-local-compat"
+    return 0
+  fi
+  return 1
 }
 
 if [[ $# -eq 1 && "$1" == "--version" ]]; then
-  if ! supports_agent_exec; then
-    echo "MITIGATE_OPENCLAW_AGENT_EXEC_UNSUPPORTED" >&2
+  if ! execution_mode >/dev/null; then
+    echo "MITIGATE_OPENCLAW_CODING_CLI_UNSUPPORTED" >&2
     exit 64
   fi
   exec "$REAL_BINARY" --version
-fi
-
-if [[ ${1:-} == "agent" && ${2:-} == "exec" ]] && ! supports_agent_exec; then
-  echo "MITIGATE_OPENCLAW_AGENT_EXEC_UNSUPPORTED" >&2
-  exit 64
 fi
 
 args=("$@")
@@ -64,4 +77,64 @@ if [[ -n "$cwd" ]]; then
 fi
 
 unset NODE_OPTIONS
+
+if [[ ${1:-} == "agent" && ${2:-} == "exec" ]]; then
+  [[ -n "$cwd" ]] || {
+    echo "MITIGATE OpenClaw coding requires an explicit disposable --cwd" >&2
+    exit 2
+  }
+
+  if supports_agent_exec; then
+    exec "$REAL_BINARY" "${filtered[@]}"
+  fi
+
+  if ! supports_agent_local; then
+    echo "MITIGATE_OPENCLAW_CODING_CLI_UNSUPPORTED" >&2
+    exit 64
+  fi
+
+  # OpenClaw v2026.7.1-2 does not yet expose `agent exec`, but its documented
+  # embedded `agent --local` path supports message-file input and a workspace
+  # override through OPENCLAW_WORKSPACE_DIR. Translate only the narrow command
+  # shape emitted by MITIGATE; reject unknown arguments instead of silently
+  # weakening the execution boundary.
+  local_args=()
+  for ((i=2; i<${#filtered[@]}; i++)); do
+    case "${filtered[$i]}" in
+      --message-file)
+        ((i+1 < ${#filtered[@]})) || {
+          echo "--message-file requires a value" >&2
+          exit 2
+        }
+        local_args+=("--message-file" "${filtered[$((i+1))]}")
+        ((i++))
+        ;;
+      --json)
+        local_args+=("--json")
+        ;;
+      --timeout)
+        ((i+1 < ${#filtered[@]})) || {
+          echo "--timeout requires a value" >&2
+          exit 2
+        }
+        local_args+=("--timeout" "${filtered[$((i+1))]}")
+        ((i++))
+        ;;
+      *)
+        echo "unsupported MITIGATE OpenClaw compatibility argument: ${filtered[$i]}" >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  session="mitigate-$(basename "$resolved" | tr -c 'A-Za-z0-9_-' '-')"
+  session="${session:0:120}"
+  export OPENCLAW_WORKSPACE_DIR="$resolved"
+  export MITIGATE_OPENCLAW_EXEC_MODE="agent-local-compat"
+  exec "$REAL_BINARY" agent \
+    --session-key "$session" \
+    --local \
+    "${local_args[@]}"
+fi
+
 exec "$REAL_BINARY" "${filtered[@]}"
