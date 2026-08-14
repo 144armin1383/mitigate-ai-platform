@@ -19,9 +19,12 @@ class ManualReviewApprovalService:
 
     The caller supplies an already-authenticated human identity. The browser
     never supplies Git refs or shell commands. Approval resolves the governed
-    mission branch and may fast-forward it into ``main``. Rejection performs no
-    Git mutation and removes the mission from active work by transitioning the
-    durable queue record to ``cancelled``.
+    mission branch and integrates it into ``main``. A direct fast-forward is
+    preferred; when ``main`` advanced after the mission branch was created, a
+    controlled non-fast-forward merge is allowed only if Git can complete it
+    without conflicts. Rejection performs no Git mutation and removes the
+    mission from active work by transitioning the durable queue record to
+    ``cancelled``.
 
     Every decision is persisted both as a per-mission JSON record and in an
     append-only JSONL history so future agents can reconstruct recent human
@@ -148,6 +151,7 @@ class ManualReviewApprovalService:
         changed_files: list[str],
         already_merged: bool,
         result_state: str,
+        integration_mode: str | None = None,
     ) -> Path:
         directory = self._decision_directory()
         path = directory / f"{mission_id}.json"
@@ -170,6 +174,8 @@ class ManualReviewApprovalService:
             "already_merged": bool(already_merged),
             "result_state": result_state,
         }
+        if integration_mode:
+            payload["integration_mode"] = integration_mode
 
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{mission_id}.",
@@ -230,6 +236,57 @@ class ManualReviewApprovalService:
             raise RuntimeError("approval_requires_manual_review")
         return mission, evidence
 
+    def _integrate_mission_commit(
+        self,
+        *,
+        mission_id: str,
+        commit: str,
+        before: str,
+    ) -> tuple[str, str]:
+        """Integrate a reviewed mission commit and return (mode, main_after)."""
+        if (
+            self._git(
+                "merge-base",
+                "--is-ancestor",
+                "main",
+                commit,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            self._git("merge", "--ff-only", commit, timeout=60)
+            return "fast_forward", self._git("rev-parse", "HEAD").stdout.strip()
+
+        merge = self._git(
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            f"Approve governed mission {mission_id}",
+            commit,
+            check=False,
+            timeout=90,
+        )
+        if merge.returncode != 0:
+            self._git("merge", "--abort", check=False, timeout=30)
+            self._git("reset", "--hard", before, timeout=30)
+            raise RuntimeError("approval_merge_conflict")
+
+        after = self._git("rev-parse", "HEAD").stdout.strip()
+        if (
+            self._git(
+                "merge-base",
+                "--is-ancestor",
+                commit,
+                after,
+                check=False,
+            ).returncode
+            != 0
+        ):
+            self._git("reset", "--hard", before, timeout=30)
+            raise RuntimeError("approval_merge_verification_failed")
+        return "merge_commit", after
+
     def approve(self, mission_id: str, *, approved_by: str) -> dict[str, Any]:
         mission, evidence = self._validate_manual_review(
             mission_id,
@@ -285,20 +342,13 @@ class ManualReviewApprovalService:
             == 0
         )
 
+        integration_mode = "already_merged"
         if not already_merged:
-            if (
-                self._git(
-                    "merge-base",
-                    "--is-ancestor",
-                    "main",
-                    commit,
-                    check=False,
-                ).returncode
-                != 0
-            ):
-                raise RuntimeError("approval_not_fast_forward")
-
-            self._git("merge", "--ff-only", commit, timeout=60)
+            integration_mode, local_after = self._integrate_mission_commit(
+                mission_id=mission_id,
+                commit=commit,
+                before=before,
+            )
             try:
                 self._git("push", "origin", "main", timeout=90)
             except Exception:
@@ -306,9 +356,22 @@ class ManualReviewApprovalService:
                 raise
 
             self._git("fetch", "origin", "main", timeout=60)
-            local_after = self._git("rev-parse", "HEAD").stdout.strip()
             remote_after = self._git("rev-parse", "origin/main").stdout.strip()
-            if local_after != commit or remote_after != commit:
+            verified_local = self._git("rev-parse", "HEAD").stdout.strip()
+            if verified_local != local_after or remote_after != local_after:
+                self._git("reset", "--hard", before, timeout=30)
+                raise RuntimeError("approval_remote_verification_failed")
+            if (
+                self._git(
+                    "merge-base",
+                    "--is-ancestor",
+                    commit,
+                    verified_local,
+                    check=False,
+                ).returncode
+                != 0
+            ):
+                self._git("reset", "--hard", before, timeout=30)
                 raise RuntimeError("approval_remote_verification_failed")
 
         after = self._git("rev-parse", "HEAD").stdout.strip()
@@ -324,6 +387,7 @@ class ManualReviewApprovalService:
             changed_files=changed_files,
             already_merged=already_merged,
             result_state="completed",
+            integration_mode=integration_mode,
         )
         self.queue.approve_manual_review(mission_id)
 
@@ -333,6 +397,8 @@ class ManualReviewApprovalService:
             "state": "completed",
             "branch": branch,
             "commit": commit,
+            "main_after": after,
+            "integration_mode": integration_mode,
             "changed_files": changed_files,
             "already_merged": already_merged,
             "approval_record": str(record),
@@ -367,9 +433,6 @@ class ManualReviewApprovalService:
             branch, commit = self._mission_ref(mission_id)
             changed_files = self._changed_files(branch)
         except RuntimeError:
-            # Rejection must remain possible even if the disposable branch has
-            # already been cleaned up; the durable failure evidence still ties
-            # the decision to the mission and request.
             branch = None
             commit = None
             changed_files = []
@@ -386,6 +449,7 @@ class ManualReviewApprovalService:
             changed_files=changed_files,
             already_merged=False,
             result_state="cancelled",
+            integration_mode="none",
         )
         self.queue.reject_manual_review(mission_id)
 
