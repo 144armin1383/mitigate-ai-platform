@@ -60,6 +60,43 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
             stderr="",
         )
 
+    def test_managed_openhands_preserves_virtualenv_interpreter_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            workspace = root / "workspace"
+            venv = root / "external-venv"
+            system_bin = root / "system" / "python3.12"
+            python_link = venv / "bin" / "python"
+            runner_script = repo / "agent" / "execution" / "openhands_subprocess_runner.py"
+            site_packages = venv / "lib" / "python3.12" / "site-packages"
+
+            workspace.mkdir(parents=True)
+            runner_script.parent.mkdir(parents=True)
+            runner_script.write_text("# runner\n", encoding="utf-8")
+            system_bin.parent.mkdir(parents=True)
+            system_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+            system_bin.chmod(0o700)
+            python_link.parent.mkdir(parents=True)
+            python_link.symlink_to(system_bin)
+            site_packages.mkdir(parents=True)
+
+            runner = ExternalOpenHandsRunner(repository_root=repo, python_path=python_link)
+            self.assertEqual(str(python_link.absolute()), str(runner.python_path))
+            self.assertNotEqual(str(system_bin.resolve()), str(runner.python_path))
+            self.assertEqual(str(venv.absolute()), str(runner._venv_root()))
+
+            completed = SimpleNamespace(returncode=0, stdout='{"run_id":"run-symlink"}\n', stderr="")
+            with patch(
+                "agent.execution.external_openhands_runner.subprocess.run",
+                side_effect=[self._preflight_success(), completed],
+            ) as mocked:
+                runner(request=self._request(repo), workspace=workspace)
+
+            self.assertEqual(str(python_link.absolute()), mocked.call_args_list[0].args[0][0])
+            self.assertEqual(str(python_link.absolute()), mocked.call_args_list[1].args[0][0])
+            self.assertEqual(str(venv.absolute()), mocked.call_args_list[0].kwargs["env"]["VIRTUAL_ENV"])
+
     def test_managed_openhands_process_runs_from_disposable_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -110,10 +147,10 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
             self.assertNotIn("PYTHONHOME", env)
             self.assertNotIn("PYTHONUSERBASE", env)
             self.assertNotIn("__PYVENV_LAUNCHER__", env)
-            self.assertEqual(str(runner.python_path.parent.parent.resolve()), env["VIRTUAL_ENV"])
+            self.assertEqual(str(runner._venv_root()), env["VIRTUAL_ENV"])
             self.assertTrue(env["PATH"].startswith(str(runner.python_path.parent) + os.pathsep))
             self.assertEqual(
-                str(runner.python_path.parent.parent / "lib" / "python3.12" / "site-packages"),
+                str(runner._venv_root() / "lib" / "python3.12" / "site-packages"),
                 env["PYTHONPATH"],
             )
             self.assertEqual("1", env["PYTHONNOUSERSITE"])
@@ -127,7 +164,7 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
                 returncode=0,
                 stdout=json.dumps({
                     "executable": str(runner.python_path),
-                    "prefix": str(runner.python_path.parent.parent),
+                    "prefix": str(runner._venv_root()),
                     "base_prefix": "/usr",
                     "sitepackages": [],
                     "openhands_spec": None,
