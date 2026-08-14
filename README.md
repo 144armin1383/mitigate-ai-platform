@@ -145,7 +145,12 @@ status_reason = manual_review_required
 requires_action = manual_review
 ```
 
-The `MITIGATE Approvals` control displays those missions directly inside Canvas. `Approve & Merge` sends only the selected mission ID to the private MITIGATE API. The browser cannot supply an arbitrary Git branch, commit, ref or shell command.
+The `MITIGATE Approvals` control displays those missions directly inside Canvas. Each card provides two explicit human decisions:
+
+- `Approve & Merge` validates the selected mission and allows MITIGATE Core to fast-forward its governed branch into `main` when safe;
+- `Reject` removes the mission from the active approval queue by transitioning its durable queue state to `cancelled` without merging or modifying canonical Git content.
+
+The Reject action is intentionally red and requires confirmation. Rejecting does not erase the audit trail or mission evidence. The browser sends only the selected mission ID; it cannot supply an arbitrary Git branch, commit, ref, approver identity or shell command.
 
 MITIGATE Core remains responsible for:
 
@@ -155,8 +160,45 @@ MITIGATE Core remains responsible for:
 - forbidden-path checks;
 - fast-forward-only merge safety;
 - GitHub push and remote verification;
-- approval audit persistence;
-- final mission transition to `completed`.
+- durable approval/rejection audit persistence;
+- final mission transition to `completed` after approval or `cancelled` after rejection.
+
+#### Durable human decision history
+
+Every Approve or Reject decision is persisted outside the Git worktree so audit state never dirties canonical `main`.
+
+Per-mission decision records are stored under:
+
+```text
+/srv/mitigate/data/runtime/approvals/<mission-id>.json
+```
+
+An append-only machine-readable history is stored at:
+
+```text
+/srv/mitigate/data/runtime/approvals/decision-history.jsonl
+```
+
+Each record includes, where available:
+
+- mission ID;
+- request ID;
+- decision (`approved` or `rejected`);
+- authenticated decision-maker identity;
+- UTC decision timestamp;
+- mission branch and commit;
+- canonical `main` before and after the decision;
+- changed-file list;
+- whether the approved commit was already merged;
+- resulting mission state.
+
+Agent Canvas can read recent records through the read-only MCP tool:
+
+```text
+mitigate_manual_review_history
+```
+
+This history is intended to be consulted during regression diagnosis, incident analysis and recovery so an agent can determine which human-approved or rejected change most recently affected the governed lifecycle.
 
 The approval integration source is version-controlled in:
 
@@ -164,6 +206,7 @@ The approval integration source is version-controlled in:
 agent/web/canvas_approval_overlay.js
 agent/runtime/manual_review_approval.py
 agent/runtime/manual_review_status.py
+agent/runtime/runtime_mcp_server.py
 agent/deploy/nginx/mitigate-ai-canvas-approval.conf
 agent/bootstrap/install_canvas_ui_integration.sh
 ```

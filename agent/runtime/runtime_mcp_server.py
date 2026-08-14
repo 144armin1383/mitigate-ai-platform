@@ -7,6 +7,7 @@ import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
@@ -225,10 +226,6 @@ def _explicit_read_only_inspection(message: str) -> bool:
             "without modifying files",
         )
     )
-    # Only unambiguous write requests should defeat an otherwise explicit
-    # read-only inspection. Generic phrases such as "modify the" are unsafe
-    # here because Canvas constraints commonly contain negated text such as
-    # "do not directly inspect or modify the canonical checkout".
     writable_intent = any(
         marker in text
         for marker in (
@@ -252,6 +249,33 @@ def _effective_task_type(message: str, task_type: str) -> str:
     return value
 
 
+def _manual_review_decision_history(limit: int = 20) -> dict[str, Any]:
+    if not isinstance(limit, int) or isinstance(limit, bool) or not (1 <= limit <= 100):
+        raise ValueError("invalid_limit")
+    data_root = Path(
+        os.environ.get("MITIGATE_AI_DATA_ROOT", "/srv/mitigate/data")
+    ).expanduser().resolve()
+    path = data_root / "runtime" / "approvals" / "decision-history.jsonl"
+    if not path.exists():
+        return {"items": [], "count": 0, "limit": limit}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise RuntimeError("decision_history_unavailable") from exc
+
+    items: list[dict[str, Any]] = []
+    for line in reversed(lines):
+        if len(items) >= limit:
+            break
+        try:
+            value = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, dict) and value.get("record_type") == "manual_review_decision":
+            items.append(value)
+    return {"items": items, "count": len(items), "limit": limit}
+
+
 mcp = MCPServer(
     "MITIGATE Runtime Gateway",
     instructions=(
@@ -260,9 +284,11 @@ mcp = MCPServer(
         "runtime routing. Use mitigate_submit_mission for coding, bug-fix, "
         "maintenance, testing and other repository work instead of editing "
         "the local Agent Canvas conversation workspace. Use the request and "
-        "mission status tools to follow execution. Runtime verification tools "
-        "remain read-only. These tools do not provide arbitrary host shell "
-        "access or direct canonical-repository access."
+        "mission status tools to follow execution. Use "
+        "mitigate_manual_review_history when diagnosing regressions after a "
+        "human approval or rejection. Runtime verification tools remain "
+        "read-only. These tools do not provide arbitrary host shell access or "
+        "direct canonical-repository access."
     ),
 )
 
@@ -292,6 +318,12 @@ def mitigate_ruflo_verify() -> dict[str, Any]:
         "/v1/ruflo/verify",
         method="POST",
     )
+
+
+@mcp.tool()
+def mitigate_manual_review_history(limit: int = 20) -> dict[str, Any]:
+    """Return recent durable human approval/rejection decisions, newest first."""
+    return _manual_review_decision_history(limit)
 
 
 @mcp.tool()

@@ -43,12 +43,7 @@ class AutonomousMissionQueue(MissionQueue):
         )
 
     def approve_manual_review(self, mission_id: str) -> None:
-        """Atomically finalize a human-approved manual-review mission.
-
-        This transition is intentionally unavailable to the autonomous worker.
-        The governed approval service calls it only after the mission branch has
-        been validated and safely fast-forwarded into canonical ``main``.
-        """
+        """Atomically finalize a human-approved manual-review mission."""
         with _FileLock(self._lock_path):
             self._load()
             mission = self._get_mission_or_raise(mission_id)
@@ -59,6 +54,26 @@ class AutonomousMissionQueue(MissionQueue):
                     "approve_manual_review() requires mission to be blocked"
                 )
             mission.state = MissionState.completed
+            self._validate_no_cycles()
+            self._save()
+
+    def reject_manual_review(self, mission_id: str) -> None:
+        """Atomically remove a rejected manual-review mission from active work.
+
+        Rejection is represented as ``cancelled`` rather than deleting the queue
+        record so the decision remains auditable and the agent can reconstruct
+        why the mission disappeared from the approval list.
+        """
+        with _FileLock(self._lock_path):
+            self._load()
+            mission = self._get_mission_or_raise(mission_id)
+            if mission.state == MissionState.cancelled:
+                return
+            if mission.state != MissionState.blocked:
+                raise ValueError(
+                    "reject_manual_review() requires mission to be blocked"
+                )
+            mission.state = MissionState.cancelled
             self._validate_no_cycles()
             self._save()
 
