@@ -11,6 +11,8 @@ class CanvasApprovalIntegrationTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("const API_BASE = '/mitigate-runtime/api'", text)
+        self.assertIn("await api('/approvals')", text)
+        self.assertNotIn("/requests?limit=60", text)
         self.assertIn("awaiting_approval", text)
         self.assertIn("Approve &amp; Merge", text)
         self.assertIn("Reject", text)
@@ -22,6 +24,7 @@ class CanvasApprovalIntegrationTests(unittest.TestCase):
         self.assertIn("decision === 'approve'", text)
         self.assertIn("Confirm Approve", text)
         self.assertIn("Confirm Reject", text)
+        self.assertIn("READ_TIMEOUT_MS", text)
         self.assertIn("ACTION_TIMEOUT_MS", text)
         self.assertIn("window.__MITIGATE_APPROVAL_LAST_RESULT__", text)
         self.assertIn("Server returned success but the mission is still awaiting approval", text)

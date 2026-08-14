@@ -6,11 +6,13 @@
 
   const API_BASE = '/mitigate-runtime/api';
   const POLL_MS = 5000;
-  const ACTION_TIMEOUT_MS = 30000;
+  const READ_TIMEOUT_MS = 8000;
+  const ACTION_TIMEOUT_MS = 60000;
   const CONFIRM_WINDOW_MS = 10000;
   const confirmations = new Map();
   let lastItems = [];
   let actionInProgress = false;
+  let loadInProgress = false;
 
   const css = `
     #mitigate-approval-launcher{position:fixed;left:16px;bottom:118px;z-index:2147483600;border:1px solid rgba(255,255,255,.14);background:#151922;color:#f4f7ff;border-radius:12px;padding:10px 12px;font:600 13px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;gap:8px}
@@ -60,9 +62,9 @@
     return true;
   };
 
-  async function api(path, options = {}) {
+  async function api(path, options = {}, timeoutMs = READ_TIMEOUT_MS) {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), ACTION_TIMEOUT_MS);
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(API_BASE + path, {
         ...options,
@@ -75,12 +77,12 @@
       let payload = {};
       try { payload = JSON.parse(text); } catch (_) {}
       if (!response.ok) {
-        const message = payload?.error?.message || payload?.error?.code || payload?.error || `HTTP ${response.status}`;
+        const message = payload?.error?.message || payload?.error?.code || payload?.error || text || `HTTP ${response.status}`;
         throw new Error(`${message} (HTTP ${response.status})`);
       }
       return payload;
     } catch (error) {
-      if (error?.name === 'AbortError') throw new Error('Approval request timed out before the server confirmed a result.');
+      if (error?.name === 'AbortError') throw new Error('Approval API timed out before the server confirmed a result.');
       throw error;
     } finally {
       window.clearTimeout(timer);
@@ -91,26 +93,26 @@
     const data = payload?.data || payload || {};
     const items = Array.isArray(data.items) ? data.items : [];
     return items.flatMap(item => {
-      if (item?.status !== 'awaiting_approval') return [];
-      const missions = Array.isArray(item.missions) ? item.missions : [];
-      return missions.flatMap(entry => {
-        const mission = entry?.mission || {};
-        if (mission?.state !== 'awaiting_approval' || mission?.requires_action !== 'manual_review' || !mission?.id) return [];
-        return [{requestId: item.request_id || '', missionId: mission.id, reason: mission.status_reason || data.status_reason || 'manual_review_required'}];
-      });
+      if (item?.status !== 'awaiting_approval' || !item?.mission_id) return [];
+      return [{
+        requestId: item.request_id || '',
+        missionId: item.mission_id,
+        reason: item.reason || 'manual_review_required'
+      }];
     });
   }
 
-  function render(items) {
+  function render(items, transientError = '') {
     lastItems = items;
     countEl.textContent = String(items.length);
     countEl.style.background = items.length ? '#f2b84b' : '#344157';
     countEl.style.color = items.length ? '#171106' : '#d7dfef';
+    const errorHtml = transientError ? `<div class="mitigate-error" style="margin:0 0 10px">${esc(transientError)}</div>` : '';
     if (!items.length) {
-      bodyEl.innerHTML = '<div class="mitigate-empty">No missions are waiting for approval.</div>';
+      bodyEl.innerHTML = errorHtml + '<div class="mitigate-empty">No missions are waiting for approval.</div>';
       return;
     }
-    bodyEl.innerHTML = items.map(item => {
+    bodyEl.innerHTML = errorHtml + items.map(item => {
       const approveArmed = isArmed(item.missionId, 'approve');
       const rejectArmed = isArmed(item.missionId, 'reject');
       return `
@@ -124,24 +126,23 @@
         <div class="mitigate-result" aria-live="polite"></div>
       </article>`;
     }).join('');
-    bodyEl.querySelectorAll('[data-approve]').forEach(button => {
-      button.addEventListener('click', () => decide(button, 'approve'));
-    });
-    bodyEl.querySelectorAll('[data-reject]').forEach(button => {
-      button.addEventListener('click', () => decide(button, 'reject'));
-    });
+    bodyEl.querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', () => decide(button, 'approve')));
+    bodyEl.querySelectorAll('[data-reject]').forEach(button => button.addEventListener('click', () => decide(button, 'reject')));
   }
 
   async function load() {
-    if (actionInProgress) return lastItems;
+    if (actionInProgress || loadInProgress) return lastItems;
+    loadInProgress = true;
     try {
-      const payload = await api('/requests?limit=60');
+      const payload = await api('/approvals');
       const items = approvalItems(payload);
       render(items);
       return items;
     } catch (error) {
-      bodyEl.innerHTML = `<div class="mitigate-error">Approval API unavailable: ${esc(error.message)}</div>`;
+      render(lastItems, `Approval API unavailable: ${error.message}`);
       return lastItems;
+    } finally {
+      loadInProgress = false;
     }
   }
 
@@ -164,9 +165,9 @@
       armDecision(missionId, decision);
       return;
     }
+
     confirmations.delete(decisionKey(missionId, decision));
     confirmations.delete(decisionKey(missionId, decision === 'approve' ? 'reject' : 'approve'));
-
     const card = button.closest('.mitigate-approval-card');
     const resultEl = card?.querySelector('.mitigate-result');
     const buttons = card ? Array.from(card.querySelectorAll('button')) : [button];
@@ -175,8 +176,9 @@
     button.textContent = decision === 'approve' ? 'Approving…' : 'Rejecting…';
     if (resultEl) resultEl.textContent = '';
     window.__MITIGATE_APPROVAL_LAST_RESULT__ = {missionId, decision, state: 'sending', at: new Date().toISOString()};
+
     try {
-      const payload = await api(`/missions/${encodeURIComponent(missionId)}/${decision}`, {method: 'POST', body: '{}'});
+      const payload = await api(`/missions/${encodeURIComponent(missionId)}/${decision}`, {method: 'POST', body: '{}'}, ACTION_TIMEOUT_MS);
       actionInProgress = false;
       const remaining = await load();
       if (remaining.some(item => item.missionId === missionId)) {
