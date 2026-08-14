@@ -46,10 +46,10 @@ class ExternalOpenHandsRunner:
     small runner script; it is never the external provider's working directory.
 
     The child Python environment is explicitly normalized to the managed
-    OpenHands virtual environment. Worker/service Python variables must never
-    leak into the provider process. The managed venv site-packages directory is
-    bound explicitly so systemd/service environment differences cannot make the
-    same interpreter lose access to the installed OpenHands SDK.
+    OpenHands virtual environment. The configured venv interpreter path must
+    retain its venv-facing symlink path: resolving ``venv/bin/python`` to the
+    underlying system interpreter destroys Python's pyvenv.cfg discovery and
+    makes ``sys.prefix`` fall back to /usr.
     """
 
     def __init__(
@@ -64,7 +64,12 @@ class ExternalOpenHandsRunner:
             or os.environ.get("MITIGATE_OPENHANDS_PYTHON")
             or "/srv/mitigate/external-runtimes/venv/bin/python"
         ).strip()
-        self.python_path = Path(configured).expanduser().resolve()
+        # CRITICAL: do not call Path.resolve() here. A normal Python virtualenv
+        # uses bin/python -> /usr/bin/pythonX.Y. Resolving the symlink before
+        # exec makes CPython start as the system interpreter and ignore the
+        # virtualenv's pyvenv.cfg/site-packages.
+        expanded_python = Path(configured).expanduser()
+        self.python_path = Path(os.path.abspath(str(expanded_python)))
         self.runner_script = (
             self.repository_root
             / "agent"
@@ -86,8 +91,14 @@ class ExternalOpenHandsRunner:
             raise ManagedOpenHandsProcessError("managed_openhands_workspace_unavailable")
         return resolved
 
+    def _venv_root(self) -> Path:
+        # Derive from the preserved venv-facing interpreter path. Resolving the
+        # root itself is safe because the virtualenv directory is not the
+        # interpreter symlink and keeps the pyvenv.cfg location intact.
+        return self.python_path.parent.parent.absolute()
+
     def _managed_site_packages(self) -> tuple[Path, ...]:
-        venv_root = self.python_path.parent.parent.resolve()
+        venv_root = self._venv_root()
         candidates = sorted(
             path.resolve()
             for path in (venv_root / "lib").glob("python*/site-packages")
@@ -106,7 +117,7 @@ class ExternalOpenHandsRunner:
         ):
             env.pop(key, None)
 
-        venv_root = self.python_path.parent.parent.resolve()
+        venv_root = self._venv_root()
         site_packages = self._managed_site_packages()
         env["VIRTUAL_ENV"] = str(venv_root)
         existing_path = env.get("PATH", "")
@@ -271,7 +282,7 @@ class ExternalOpenHandsRunner:
             provider_metadata={
                 "working_directory": str(workspace),
                 "python_executable": str(self.python_path),
-                "virtual_env": str(self.python_path.parent.parent.resolve()),
+                "virtual_env": str(self._venv_root()),
                 "site_packages": [str(path) for path in self._managed_site_packages()],
                 "runtime_preflight": preflight,
                 "returncode": proc.returncode,
