@@ -33,21 +33,17 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             workspace.mkdir(parents=True)
             fake = root / "openclaw"
             self._compatible_fake(fake)
-            env = {
-                **os.environ,
-                "MITIGATE_OPENCLAW_REAL_BINARY": str(fake),
-                "MITIGATE_WORKSPACE_ROOT": str(workspaces),
-                "NODE_OPTIONS": "--jitless",
-            }
             proc = subprocess.run(
-                [
-                    "bash", str(wrapper), "agent", "exec", "--message-file", "-",
-                    "--cwd", str(workspace), "--json",
-                ],
+                ["bash", str(wrapper), "agent", "exec", "--message-file", "-", "--cwd", str(workspace), "--json"],
                 text=True,
                 input="probe",
                 capture_output=True,
-                env=env,
+                env={
+                    **os.environ,
+                    "MITIGATE_OPENCLAW_REAL_BINARY": str(fake),
+                    "MITIGATE_WORKSPACE_ROOT": str(workspaces),
+                    "NODE_OPTIONS": "--jitless",
+                },
                 check=False,
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
@@ -78,6 +74,28 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             self.assertEqual(64, proc.returncode)
             self.assertIn("MITIGATE_OPENCLAW_AGENT_EXEC_UNSUPPORTED", proc.stderr)
 
+    def test_wrapper_explicit_disabled_mode_never_launches_node(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        wrapper = repo / "agent" / "execution" / "openclaw_compat_wrapper.sh"
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td) / "openclaw"
+            fake.write_text("#!/usr/bin/env bash\necho SHOULD_NOT_RUN\nexit 0\n", encoding="utf-8")
+            fake.chmod(0o755)
+            proc = subprocess.run(
+                ["bash", str(wrapper), "--version"],
+                text=True,
+                capture_output=True,
+                env={
+                    **os.environ,
+                    "MITIGATE_OPENCLAW_REAL_BINARY": str(fake),
+                    "MITIGATE_OPENCLAW_CODING_DISABLED": "1",
+                },
+                check=False,
+            )
+            self.assertEqual(64, proc.returncode)
+            self.assertNotIn("SHOULD_NOT_RUN", proc.stdout)
+            self.assertIn("MITIGATE_OPENCLAW_CODING_DISABLED", proc.stderr)
+
     def test_wrapper_rejects_cwd_outside_disposable_root(self) -> None:
         repo = Path(__file__).resolve().parents[2]
         wrapper = repo / "agent" / "execution" / "openclaw_compat_wrapper.sh"
@@ -103,12 +121,12 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             self.assertEqual(2, proc.returncode)
             self.assertIn("outside MITIGATE disposable workspace root", proc.stderr)
 
-    def test_activation_restores_hardening_for_legacy_openclaw(self) -> None:
+    def test_activation_keeps_legacy_openclaw_fail_closed_and_hardened(self) -> None:
         repo = Path(__file__).resolve().parents[2]
         text = (repo / "agent" / "maintenance" / "activate_openclaw_worker_compat.sh").read_text(encoding="utf-8")
         self.assertIn("OPENCLAW_AGENT_EXEC_SUPPORTED=no", text)
-        self.assertIn('rm -f "$DROPIN_FILE"', text)
-        self.assertIn("MemoryDenyWriteExecute=false", text)
+        self.assertIn("MemoryDenyWriteExecute=true", text)
+        self.assertIn("MITIGATE_OPENCLAW_CODING_DISABLED=1", text)
         self.assertIn("MITIGATE_OPENCLAW_BINARY", text)
 
 
