@@ -44,6 +44,11 @@ class ExternalOpenHandsRunner:
     The subprocess working directory is always the MITIGATE-provided disposable
     workspace. Canonical main is used only as the immutable location of this
     small runner script; it is never the external provider's working directory.
+
+    The child Python environment is explicitly normalized to the managed
+    OpenHands virtual environment. Worker/service Python variables must never
+    leak into the provider process because PYTHONHOME/PYTHONPATH/VIRTUAL_ENV can
+    make an otherwise valid external interpreter import the wrong environment.
     """
 
     def __init__(
@@ -80,6 +85,37 @@ class ExternalOpenHandsRunner:
             raise ManagedOpenHandsProcessError("managed_openhands_workspace_unavailable")
         return resolved
 
+    def _subprocess_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+
+        # Never inherit the worker/agent Python environment into the independent
+        # managed OpenHands interpreter. These variables can override venv
+        # discovery and reproduce a ModuleNotFoundError even when the exact same
+        # interpreter imports OpenHands successfully from an interactive shell.
+        for key in (
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "PYTHONUSERBASE",
+            "__PYVENV_LAUNCHER__",
+        ):
+            env.pop(key, None)
+
+        venv_root = self.python_path.parent.parent.resolve()
+        env["VIRTUAL_ENV"] = str(venv_root)
+        existing_path = env.get("PATH", "")
+        env["PATH"] = (
+            str(self.python_path.parent)
+            + (os.pathsep + existing_path if existing_path else "")
+        )
+        env["PYTHONNOUSERSITE"] = "1"
+        env["OPENHANDS_SUPPRESS_BANNER"] = "1"
+
+        # Keep Git/runtime tools deterministic and stop user-level Git config
+        # warnings from influencing a provider run.
+        env.setdefault("GIT_CONFIG_NOSYSTEM", "0")
+        env["GIT_OPTIONAL_LOCKS"] = "0"
+        return env
+
     def __call__(self, *, request: ExecutionRequest, workspace: Path) -> Any:
         if not self.available():
             raise ManagedOpenHandsProcessError("managed_openhands_runtime_unavailable")
@@ -102,15 +138,11 @@ class ExternalOpenHandsRunner:
             "prompt": prompt,
         }
 
-        env = dict(os.environ)
+        env = self._subprocess_env()
         env["MITIGATE_OPENHANDS_REQUEST_JSON"] = json.dumps(
             payload,
             separators=(",", ":"),
         )
-        # Keep Git/runtime tools deterministic and stop user-level Git config
-        # warnings from influencing a provider run.
-        env.setdefault("GIT_CONFIG_NOSYSTEM", "0")
-        env["GIT_OPTIONAL_LOCKS"] = "0"
 
         try:
             proc = subprocess.run(
@@ -175,6 +207,8 @@ class ExternalOpenHandsRunner:
             id=run_id,
             provider_metadata={
                 "working_directory": str(workspace),
+                "python_executable": str(self.python_path),
+                "virtual_env": str(self.python_path.parent.parent.resolve()),
                 "returncode": proc.returncode,
                 "stdout_tail": stdout[-2000:],
                 "stderr_tail": stderr[-2000:],
