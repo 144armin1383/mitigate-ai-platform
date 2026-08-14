@@ -99,18 +99,22 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
             completed = SimpleNamespace(returncode=0, stdout='{"run_id":"run-symlink"}\n', stderr="")
             with patch(
                 "agent.execution.external_openhands_runner.subprocess.run",
-                side_effect=[self._preflight_success(), completed],
-            ) as mocked:
+                return_value=self._preflight_success(),
+            ) as preflight_mock, patch.object(
+                runner,
+                "_run_agent",
+                return_value=completed,
+            ) as run_mock:
                 runner(request=self._request(repo), workspace=workspace)
 
-            self.assertEqual(str(python_link.absolute()), mocked.call_args_list[0].args[0][0])
-            self.assertEqual(str(python_link.absolute()), mocked.call_args_list[1].args[0][0])
-            self.assertEqual(str(venv.absolute()), mocked.call_args_list[0].kwargs["env"]["VIRTUAL_ENV"])
+            self.assertEqual(str(python_link.absolute()), preflight_mock.call_args.args[0][0])
+            self.assertEqual(str(venv.absolute()), preflight_mock.call_args.kwargs["env"]["VIRTUAL_ENV"])
+            self.assertEqual(workspace.resolve(), run_mock.call_args.kwargs["workspace"].resolve())
 
     def test_managed_openhands_process_runs_from_disposable_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            repo, workspace, runner_script, runner = self._runner_fixture(root)
+            repo, workspace, _, runner = self._runner_fixture(root)
             completed = SimpleNamespace(
                 returncode=0,
                 stdout='{"run_id":"run-1"}\n',
@@ -118,17 +122,18 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
             )
             with patch(
                 "agent.execution.external_openhands_runner.subprocess.run",
-                side_effect=[self._preflight_success(), completed],
-            ) as mocked:
+                return_value=self._preflight_success(),
+            ) as preflight_mock, patch.object(
+                runner,
+                "_run_agent",
+                return_value=completed,
+            ) as run_mock:
                 result = runner(request=self._request(repo), workspace=workspace)
 
-            self.assertEqual(2, mocked.call_count)
-            runtime_call = mocked.call_args_list[1]
-            kwargs = runtime_call.kwargs
-            argv = runtime_call.args[0]
-            self.assertEqual(workspace.resolve(), Path(kwargs["cwd"]).resolve())
-            self.assertEqual(str(runner_script.resolve()), argv[1])
-            self.assertNotEqual(repo.resolve(), Path(kwargs["cwd"]).resolve())
+            self.assertEqual(1, preflight_mock.call_count)
+            self.assertEqual(workspace.resolve(), Path(preflight_mock.call_args.kwargs["cwd"]).resolve())
+            self.assertEqual(workspace.resolve(), run_mock.call_args.kwargs["workspace"].resolve())
+            self.assertNotEqual(repo.resolve(), run_mock.call_args.kwargs["workspace"].resolve())
             self.assertEqual("run-1", result.id)
             self.assertEqual(str(workspace.resolve()), result.provider_metadata["working_directory"])
             self.assertTrue(result.provider_metadata["runtime_preflight"]["openhands_spec"])
@@ -149,11 +154,15 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
             with patch.dict(os.environ, contaminated, clear=False):
                 with patch(
                     "agent.execution.external_openhands_runner.subprocess.run",
-                    side_effect=[self._preflight_success(), completed],
-                ) as mocked:
+                    return_value=self._preflight_success(),
+                ) as mocked, patch.object(
+                    runner,
+                    "_run_agent",
+                    return_value=completed,
+                ):
                     runner(request=self._request(repo), workspace=workspace)
 
-            env = mocked.call_args_list[0].kwargs["env"]
+            env = mocked.call_args.kwargs["env"]
             self.assertNotIn("PYTHONHOME", env)
             self.assertNotIn("PYTHONUSERBASE", env)
             self.assertNotIn("__PYVENV_LAUNCHER__", env)
