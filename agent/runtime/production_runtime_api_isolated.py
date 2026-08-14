@@ -7,6 +7,9 @@ from agent.runtime.autonomous_mission_queue import AutonomousMissionQueue
 from agent.runtime.isolated_request_queue_adapter import (
     IsolatedProductionRequestQueueAdapter,
 )
+from agent.runtime.manual_review_status import (
+    ManualReviewAwareProductionRuntimeFacade,
+)
 
 
 # Keep the existing request governance path intact while replacing generic
@@ -16,6 +19,9 @@ production_request_composition.ProductionRequestQueueAdapter = (
     IsolatedProductionRequestQueueAdapter
 )
 production_runtime_api.MissionQueue = AutonomousMissionQueue
+production_runtime_api.ProductionRuntimeFacade = (
+    ManualReviewAwareProductionRuntimeFacade
+)
 
 from agent.runtime.production_runtime_api import main  # noqa: E402
 
