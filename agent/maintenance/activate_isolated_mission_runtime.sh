@@ -5,7 +5,7 @@ IFS=$'\n\t'
 ROOT="${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}"
 API_UNIT="/etc/systemd/system/mitigate-ai-runtime-api.service"
 WORKER_UNIT="/etc/systemd/system/mitigate-ai-worker.service"
-OPENHANDS_STATE_ROOT="${MITIGATE_OPENHANDS_HOME:-/srv/mitigate/data/openhands}"
+OPENHANDS_STATE_ROOT="${MITIGATE_OPENHANDS_HOME:-/srv/mitigate/data/openhands-runtime}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="/etc/mitigate-ai/systemd-backups/$STAMP"
 
@@ -16,9 +16,10 @@ BACKUP_DIR="/etc/mitigate-ai/systemd-backups/$STAMP"
 
 cd "$ROOT"
 
-# OpenHands runs as the unprivileged ubuntu worker while ProtectHome=true keeps
-# /home/ubuntu inaccessible. Provision a dedicated writable state tree under
-# MITIGATE's managed data root so profiles/cache/state never fall back to HOME.
+# The production OpenHands worker runs as ubuntu while Agent Canvas runs in its
+# container as UID/GID 10001. Keep their persistent state roots separate so
+# fixing or provisioning one runtime can never change ownership underneath the
+# other. ProtectHome=true remains enabled for the worker.
 install -d -o ubuntu -g ubuntu -m 0700 "$OPENHANDS_STATE_ROOT"
 for relative in .config .cache .local .local/share .openhands; do
   install -d -o ubuntu -g ubuntu -m 0700 "$OPENHANDS_STATE_ROOT/$relative"
@@ -236,6 +237,7 @@ echo "MITIGATE_RECOVERY_CHAIN_LIMIT=2"
 echo "MITIGATE_GIT_DIAGNOSTICS_WARNING_ISOLATION=ACTIVE"
 echo "MITIGATE_OPENHANDS_DISPOSABLE_CWD=ACTIVE"
 echo "MITIGATE_OPENHANDS_MANAGED_HOME=ACTIVE"
+echo "MITIGATE_OPENHANDS_STATE_ISOLATION=ACTIVE"
 echo "MITIGATE_PROVIDER_FAILOVER_ROUTER=ACTIVE"
 echo "MITIGATE_FAILURE_EVIDENCE=ACTIVE"
 echo "MITIGATE_INTENT_CLASSIFIER_V2=ACTIVE"
