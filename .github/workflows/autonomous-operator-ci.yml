@@ -13,6 +13,7 @@ on:
       - 'agent/tests/test_host_recovery_supervisor.py'
       - 'agent/tests/test_mission_diagnostics_git_warnings.py'
       - 'agent/tests/test_runtime_execution_observability.py'
+      - 'agent/tests/test_runtime_router_failover.py'
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
@@ -26,6 +27,7 @@ on:
       - 'agent/tests/test_host_recovery_supervisor.py'
       - 'agent/tests/test_mission_diagnostics_git_warnings.py'
       - 'agent/tests/test_runtime_execution_observability.py'
+      - 'agent/tests/test_runtime_router_failover.py'
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
@@ -51,6 +53,7 @@ jobs:
             agent/execution/external_openhands_runner.py \
             agent/execution/managed_openhands_adapter.py \
             agent/execution/openclaw_adapter.py \
+            agent/execution/runtime_router.py \
             agent/runtime/autonomous_mission_queue.py \
             agent/runtime/autonomous_mission_diagnostics.py \
             agent/runtime/host_recovery_supervisor.py \
@@ -66,6 +69,7 @@ jobs:
             agent/tests/test_host_recovery_supervisor.py \
             agent/tests/test_mission_diagnostics_git_warnings.py \
             agent/tests/test_runtime_execution_observability.py \
+            agent/tests/test_runtime_router_failover.py \
             agent/tests/test_runtime_consolidation_controller.py
       - name: Check shell integration
         run: |
@@ -81,5 +85,6 @@ jobs:
             agent.tests.test_host_recovery_supervisor \
             agent.tests.test_mission_diagnostics_git_warnings \
             agent.tests.test_runtime_execution_observability \
+            agent.tests.test_runtime_router_failover \
             agent.tests.test_runtime_consolidation_controller \
             -v
