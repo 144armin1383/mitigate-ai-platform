@@ -45,7 +45,8 @@ python3 -m py_compile \
   agent/tests/test_runtime_execution_observability.py \
   agent/tests/test_runtime_router_failover.py \
   agent/tests/test_openhands_managed_home.py \
-  agent/tests/test_openhands_timeout_cleanup.py
+  agent/tests/test_openhands_timeout_cleanup.py \
+  agent/tests/test_read_only_mission_completion.py
 
 "$ROOT/agent/.venv/bin/python" -m unittest \
   agent.tests.test_isolated_mission_runtime \
@@ -55,7 +56,8 @@ python3 -m py_compile \
   agent.tests.test_runtime_execution_observability \
   agent.tests.test_runtime_router_failover \
   agent.tests.test_openhands_managed_home \
-  agent.tests.test_openhands_timeout_cleanup -v
+  agent.tests.test_openhands_timeout_cleanup \
+  agent.tests.test_read_only_mission_completion -v
 
 OPENHANDS_PYTHON="${MITIGATE_OPENHANDS_PYTHON:-/srv/mitigate/external-runtimes/venv/bin/python}"
 OPENHANDS_OK=0
@@ -237,6 +239,7 @@ echo "MITIGATE_OPENHANDS_DISPOSABLE_CWD=ACTIVE"
 echo "MITIGATE_OPENHANDS_MANAGED_HOME=ACTIVE"
 echo "MITIGATE_OPENHANDS_STATE_ISOLATION=ACTIVE"
 echo "MITIGATE_OPENHANDS_TIMEOUT_CLEANUP=ACTIVE"
+echo "MITIGATE_READ_ONLY_COMPLETION=ACTIVE"
 echo "MITIGATE_PROVIDER_FAILOVER_ROUTER=ACTIVE"
 echo "MITIGATE_FAILURE_EVIDENCE=ACTIVE"
 echo "MITIGATE_INTENT_CLASSIFIER_V2=ACTIVE"
