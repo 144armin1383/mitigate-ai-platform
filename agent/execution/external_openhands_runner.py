@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -35,9 +36,16 @@ class ExternalOpenHandsRunner:
         expanded_python = Path(configured).expanduser()
         self.python_path = Path(os.path.abspath(str(expanded_python)))
         self.runner_script = (self.repository_root / "agent" / "execution" / "openhands_subprocess_runner.py").resolve()
-        self.state_root = Path(
-            os.environ.get("MITIGATE_OPENHANDS_HOME") or "/srv/mitigate/data/openhands"
-        ).expanduser().absolute()
+
+        configured_state = str(os.environ.get("MITIGATE_OPENHANDS_HOME") or "").strip()
+        production_data_root = Path("/srv/mitigate/data")
+        if configured_state:
+            state_root = Path(configured_state)
+        elif production_data_root.is_dir():
+            state_root = production_data_root / "openhands"
+        else:
+            state_root = Path(tempfile.gettempdir()) / "mitigate-openhands"
+        self.state_root = state_root.expanduser().absolute()
 
     def available(self) -> bool:
         return self.python_path.is_file() and os.access(self.python_path, os.X_OK) and self.runner_script.is_file()
@@ -56,7 +64,24 @@ class ExternalOpenHandsRunner:
         venv_root = self._venv_root()
         return tuple(sorted(path.resolve() for path in (venv_root / "lib").glob("python*/site-packages") if path.is_dir()))
 
+    def _prepare_state_root(self) -> None:
+        try:
+            for path in (
+                self.state_root,
+                self.state_root / ".config",
+                self.state_root / ".cache",
+                self.state_root / ".local" / "share",
+                self.state_root / ".openhands",
+            ):
+                path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ManagedOpenHandsProcessError(
+                "managed_openhands_state_unavailable",
+                stderr=str(exc),
+            ) from exc
+
     def _subprocess_env(self) -> dict[str, str]:
+        self._prepare_state_root()
         env = dict(os.environ)
         for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE", "__PYVENV_LAUNCHER__"):
             env.pop(key, None)
