@@ -30,12 +30,14 @@ python3 -m py_compile \
   agent/runtime/runtime_mcp_server_extended.py \
   agent/tests/test_isolated_mission_runtime.py \
   agent/tests/test_autonomous_operator_runtime.py \
-  agent/tests/test_host_recovery_supervisor.py
+  agent/tests/test_host_recovery_supervisor.py \
+  agent/tests/test_mission_diagnostics_git_warnings.py
 
 "$ROOT/agent/.venv/bin/python" -m unittest \
   agent.tests.test_isolated_mission_runtime \
   agent.tests.test_autonomous_operator_runtime \
-  agent.tests.test_host_recovery_supervisor -v
+  agent.tests.test_host_recovery_supervisor \
+  agent.tests.test_mission_diagnostics_git_warnings -v
 
 OPENHANDS_PYTHON="${MITIGATE_OPENHANDS_PYTHON:-/srv/mitigate/external-runtimes/venv/bin/python}"
 test -x "$OPENHANDS_PYTHON"
@@ -175,6 +177,7 @@ echo "ISOLATED_MISSION_RUNTIME_ACTIVATED=yes"
 echo "MITIGATE_AUTONOMOUS_OPERATOR=ACTIVE"
 echo "MITIGATE_HOST_RECOVERY_SUPERVISOR=ACTIVE"
 echo "MITIGATE_RECOVERY_CHAIN_LIMIT=2"
+echo "MITIGATE_GIT_DIAGNOSTICS_WARNING_ISOLATION=ACTIVE"
 echo "SYSTEMD_BACKUP_DIR=$BACKUP_DIR"
 echo "GIT_STATUS_BEGIN"
 git status --short
