@@ -1,5 +1,5 @@
 [Unit]
-Description=MITIGATE AI Web Control Panel
+Description=MITIGATE AI Canvas Control API
 After=network-online.target mitigate-ai-runtime-api.service
 Wants=network-online.target
 Requires=mitigate-ai-runtime-api.service

@@ -166,7 +166,13 @@ class ManualReviewApprovalTests(unittest.TestCase):
             )
             self.assertNotEqual(before, mission_commit)
             remote_main = subprocess.check_output(
-                ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/main"],
+                [
+                    "git",
+                    "--git-dir",
+                    str(remote),
+                    "rev-parse",
+                    "refs/heads/main",
+                ],
                 text=True,
             ).strip()
             self.assertEqual(mission_commit, remote_main)
@@ -205,17 +211,17 @@ class ManualReviewApprovalTests(unittest.TestCase):
                 )
             self.assertEqual("blocked", queue.get(mission_id)["state"])
 
-    def test_panel_contains_governed_approval_action(self) -> None:
-        html = panel_server.PANEL_HTML
-        self.assertIn("Approve &amp; Merge", html)
-        self.assertIn("awaiting_approval", html)
-        self.assertIn("approveSelectedMission", html)
+    def test_approval_backend_is_api_only(self) -> None:
+        self.assertFalse(hasattr(panel_server, "PANEL_HTML"))
         self.assertTrue(
             issubclass(
                 panel_server_approval.ApprovalPanelServer,
                 panel_server.PanelServer,
             )
         )
+        source = Path(panel_server.__file__).read_text(encoding="utf-8")
+        self.assertIn("standalone_panel_removed", source)
+        self.assertNotIn("Agent Control Panel", source)
 
 
 if __name__ == "__main__":

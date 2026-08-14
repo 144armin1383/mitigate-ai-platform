@@ -91,17 +91,22 @@ Agent Canvas has a dedicated upgrade workflow that performs preflight checks, pu
 
 The OpenHands LLM configuration is persisted through the Agent Server API so a Canvas replacement or upgrade does not require manually re-entering the model configuration.
 
-## Non-invasive MITIGATE runtime UI in Agent Canvas
+## Unified MITIGATE controls inside Agent Canvas
 
-MITIGATE exposes runtime visibility inside the existing Agent Canvas interface through a non-invasive Nginx integration layer. The official Agent Canvas image and frontend files remain untouched.
+Agent Canvas is the single normal operator UI. MITIGATE does not maintain a second public control-panel page. The legacy `/mitigate-panel/` UI is intentionally removed; the service bound to `127.0.0.1:8766` is a private API backend only and is not a public standalone panel.
 
-The runtime button appears inside the Canvas UI as:
+MITIGATE-specific controls are injected into the existing `/canvas` interface through a repository-managed Nginx integration layer. The official Agent Canvas image, source code and container filesystem remain untouched.
+
+The Canvas UI contains two MITIGATE-owned controls:
 
 ```text
 MITIGATE Runtimes
+MITIGATE Approvals
 ```
 
-Opening it displays the live status of:
+### MITIGATE Runtimes
+
+Opening `MITIGATE Runtimes` displays live status for:
 
 ```text
 OpenHands
@@ -109,44 +114,94 @@ OpenClaw
 Ruflo
 ```
 
-The UI also supports refresh and functional diagnostics. The runtime data is supplied by the MITIGATE control-panel API and external runtime probes.
+For every runtime the overlay reports:
 
-The integration source is version-controlled in:
+- installed version;
+- latest stable upstream version;
+- whether the installed version is current or an update is available;
+- runtime availability;
+- LLM configuration for OpenHands;
+- optional functional diagnostics for OpenClaw and Ruflo.
+
+Latest-version checks use the same upstream package sources used by the managed upgrade lifecycle: PyPI for `openhands-sdk` and npm for OpenClaw/Ruflo. A release-check failure is reported separately and must not make Agent Canvas unavailable.
+
+The runtime integration source is version-controlled in:
 
 ```text
 agent/integrations/agent-canvas/mitigate-runtime-overlay.js
+agent/web/external_runtime_probe.py
 agent/bootstrap/install_canvas_ui_integration.sh
 agent/maintenance/verify_canvas_ui_integration.sh
 ```
 
-The integration is deliberately external to the upstream Agent Canvas image. It does not use `docker exec` to patch the Canvas frontend, does not overwrite files inside `/opt/agent-canvas`, and does not require maintaining a fork of the upstream UI.
+### MITIGATE Approvals
 
-After an Agent Canvas upgrade, MITIGATE performs a compatibility check. If the overlay is no longer compatible with the upstream HTML structure, the integration is reported as degraded while the official Canvas upgrade remains active. A UI-integration failure must not break or roll back an otherwise healthy Agent Canvas release.
-
-The production validation completed successfully with:
+When MITIGATE Core reaches a governed `manual_review_required` boundary, the public mission state is exposed as:
 
 ```text
-OpenHands  1.42.1      Available, LLM configured
-OpenClaw   2026.7.1-2  Available, functional probe OK
-Ruflo      3.38.9      Available, functional probe OK
+state = awaiting_approval
+queue_state = blocked
+status_reason = manual_review_required
+requires_action = manual_review
 ```
 
-OpenClaw uses the portable state path:
+The `MITIGATE Approvals` control displays those missions directly inside Canvas. `Approve & Merge` sends only the selected mission ID to the private MITIGATE API. The browser cannot supply an arbitrary Git branch, commit, ref or shell command.
+
+MITIGATE Core remains responsible for:
+
+- resolving the mission branch;
+- verifying canonical `main` is clean and synchronized with `origin/main`;
+- `git diff --check` validation;
+- forbidden-path checks;
+- fast-forward-only merge safety;
+- GitHub push and remote verification;
+- approval audit persistence;
+- final mission transition to `completed`.
+
+The approval integration source is version-controlled in:
 
 ```text
-/srv/mitigate/data/openclaw
+agent/web/canvas_approval_overlay.js
+agent/runtime/manual_review_approval.py
+agent/runtime/manual_review_status.py
+agent/deploy/nginx/mitigate-ai-canvas-approval.conf
+agent/bootstrap/install_canvas_ui_integration.sh
 ```
 
-rather than a user-specific home-directory state path. This path is shared consistently across the MITIGATE panel, runtime API and worker services.
+## Canvas update survival
+
+MITIGATE Canvas controls are deliberately external to the upstream Agent Canvas image. They do not use `docker exec` to patch the Canvas frontend, do not overwrite files inside the upstream container, and do not require a fork of Agent Canvas.
+
+The durable boundary is:
+
+```text
+Agent Canvas upstream UI
+        ↑
+Nginx external script injection
+        ↑
+MITIGATE repository-managed runtime + approval overlays
+        ↑
+Same-origin /mitigate-runtime/... routes
+        ↑
+Loopback-only MITIGATE API on 127.0.0.1:8766
+```
+
+After an Agent Canvas upgrade, rerun:
+
+```bash
+sudo bash /srv/mitigate/mitigate-ai-platform/agent/bootstrap/install_canvas_ui_integration.sh
+```
+
+The installer is idempotent, recreates both overlays and API routes from GitHub, validates Nginx before reload, keeps timestamped host backups, and intentionally removes the obsolete standalone `/mitigate-panel/` route. It contains no public IP or hostname dependency, so the same integration works after migration from the current IP to a domain on the same Nginx host.
+
+If an upstream Canvas HTML change makes script injection incompatible, MITIGATE must report the integration as degraded without modifying or rolling back an otherwise healthy Agent Canvas release.
 
 ### Upstream protection policy
-
-The following rules apply to Agent Canvas integration:
 
 ```text
 NEVER modify upstream Agent Canvas frontend files.
 NEVER overwrite files inside the official Agent Canvas container.
-NEVER require a permanent fork of the upstream frontend for MITIGATE runtime status.
+NEVER require a permanent fork of the upstream frontend for MITIGATE controls.
 Keep MITIGATE UI code in this repository, outside the upstream image.
 Agent Canvas updates remain independent from MITIGATE UI compatibility.
 A failed MITIGATE overlay must not make Agent Canvas unavailable.
@@ -157,6 +212,14 @@ A failed MITIGATE overlay must not make Agent Canvas unavailable.
 OpenHands, OpenClaw and Ruflo have dedicated upgrade scripts. Updates are performed through controlled candidate/install workflows and are verified before the new runtime is accepted. OpenClaw and Ruflo update handling includes rollback hardening to avoid leaving the active runtime in a partially upgraded state.
 
 On low-memory hosts, swap must remain available because npm dependency installation can temporarily require substantially more memory than normal runtime operation.
+
+OpenClaw uses the portable state path:
+
+```text
+/srv/mitigate/data/openclaw
+```
+
+rather than a user-specific home-directory state path. This path is shared consistently across the MITIGATE API, runtime gateway and worker services.
 
 ## Daily update status
 
@@ -190,4 +253,4 @@ Routine operation should normally rely on the automatic lifecycle rather than re
 
 ## Operational design goal
 
-The repository is the portable source of truth for MITIGATE AI. Installation, runtime configuration, update lifecycle, resource safeguards, control-panel services, Agent Canvas integration and recovery behavior should be encoded in GitHub wherever practical so a fresh server can be deployed from the repository without reconstructing previously solved operational fixes by hand.
+The repository is the portable source of truth for MITIGATE AI. Installation, runtime configuration, update lifecycle, resource safeguards, Canvas control APIs, Agent Canvas integration and recovery behavior should be encoded in GitHub wherever practical so a fresh server can be deployed from the repository without reconstructing previously solved operational fixes by hand.

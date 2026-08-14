@@ -8,10 +8,10 @@
   const POLL_MS = 5000;
 
   const css = `
-    #mitigate-approval-launcher{position:fixed;left:16px;bottom:72px;z-index:2147483600;border:1px solid rgba(255,255,255,.14);background:#151922;color:#f4f7ff;border-radius:12px;padding:10px 12px;font:600 13px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;gap:8px}
+    #mitigate-approval-launcher{position:fixed;left:16px;bottom:118px;z-index:2147483600;border:1px solid rgba(255,255,255,.14);background:#151922;color:#f4f7ff;border-radius:12px;padding:10px 12px;font:600 13px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;gap:8px}
     #mitigate-approval-launcher:hover{background:#1c2230}
     #mitigate-approval-count{min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:#f2b84b;color:#171106;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
-    #mitigate-approval-drawer{position:fixed;left:16px;bottom:118px;z-index:2147483601;width:min(420px,calc(100vw - 32px));max-height:min(620px,calc(100vh - 150px));overflow:auto;background:#0f1420;color:#edf2ff;border:1px solid rgba(255,255,255,.14);border-radius:14px;box-shadow:0 16px 50px rgba(0,0,0,.5);font:13px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:none}
+    #mitigate-approval-drawer{position:fixed;left:16px;bottom:164px;z-index:2147483601;width:min(420px,calc(100vw - 32px));max-height:min(620px,calc(100vh - 196px));overflow:auto;background:#0f1420;color:#edf2ff;border:1px solid rgba(255,255,255,.14);border-radius:14px;box-shadow:0 16px 50px rgba(0,0,0,.5);font:13px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:none}
     #mitigate-approval-drawer.open{display:block}
     .mitigate-approval-head{position:sticky;top:0;background:#0f1420;border-bottom:1px solid rgba(255,255,255,.1);padding:14px 14px 12px;display:flex;justify-content:space-between;gap:12px;align-items:center}
     .mitigate-approval-title{font-weight:800;font-size:14px}.mitigate-approval-sub{font-size:11px;color:#9aa7be;margin-top:3px}.mitigate-approval-actions{display:flex;gap:6px}.mitigate-mini-btn{border:1px solid rgba(255,255,255,.14);background:#1a2231;color:#e9efff;border-radius:8px;padding:7px 9px;font-weight:700;cursor:pointer}.mitigate-mini-btn:hover{background:#232d3f}.mitigate-approval-body{padding:12px}.mitigate-empty{padding:20px 8px;color:#9aa7be;text-align:center}.mitigate-approval-card{border:1px solid rgba(255,255,255,.11);background:#141b28;border-radius:11px;padding:12px;margin-bottom:10px}.mitigate-approval-card:last-child{margin-bottom:0}.mitigate-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.mitigate-id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#b9c7df;overflow-wrap:anywhere}.mitigate-badge{display:inline-flex;border-radius:999px;padding:3px 7px;background:rgba(242,184,75,.15);color:#ffd378;font-size:10px;font-weight:800;white-space:nowrap}.mitigate-reason{color:#a9b5ca;font-size:11px;margin:8px 0}.mitigate-approve-btn{width:100%;border:0;border-radius:9px;background:#3bd09d;color:#07140f;font-weight:850;padding:9px 10px;cursor:pointer}.mitigate-approve-btn:hover{filter:brightness(1.05)}.mitigate-approve-btn:disabled{opacity:.55;cursor:wait}.mitigate-error{color:#ff9ba6;font-size:11px;margin-top:8px}.mitigate-success{color:#6ee7b7;font-size:11px;margin-top:8px}
@@ -115,7 +115,7 @@
     button.textContent = 'Approving…';
     if (resultEl) resultEl.textContent = '';
     try {
-      const result = await api(`/missions/${encodeURIComponent(missionId)}/approve`, {method: 'POST', body: '{}'});
+      await api(`/missions/${encodeURIComponent(missionId)}/approve`, {method: 'POST', body: '{}'});
       if (resultEl) {
         resultEl.className = 'mitigate-result mitigate-success';
         resultEl.textContent = 'Approved and merged successfully.';
