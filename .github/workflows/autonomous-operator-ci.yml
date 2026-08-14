@@ -19,6 +19,7 @@ on:
       - 'agent/tests/test_openclaw_worker_compat.py'
       - 'agent/tests/test_openhands_managed_home.py'
       - 'agent/tests/test_openhands_timeout_cleanup.py'
+      - 'agent/tests/test_read_only_mission_completion.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
     paths:
@@ -37,6 +38,7 @@ on:
       - 'agent/tests/test_openclaw_worker_compat.py'
       - 'agent/tests/test_openhands_managed_home.py'
       - 'agent/tests/test_openhands_timeout_cleanup.py'
+      - 'agent/tests/test_read_only_mission_completion.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
 permissions:
@@ -81,7 +83,8 @@ jobs:
             agent/tests/test_runtime_consolidation_controller.py \
             agent/tests/test_openclaw_worker_compat.py \
             agent/tests/test_openhands_managed_home.py \
-            agent/tests/test_openhands_timeout_cleanup.py
+            agent/tests/test_openhands_timeout_cleanup.py \
+            agent/tests/test_read_only_mission_completion.py
       - name: Check shell integration
         run: |
           bash -n agent/bootstrap/configure_openhands_mcp.sh
@@ -103,4 +106,5 @@ jobs:
             agent.tests.test_openclaw_worker_compat \
             agent.tests.test_openhands_managed_home \
             agent.tests.test_openhands_timeout_cleanup \
+            agent.tests.test_read_only_mission_completion \
             -v
