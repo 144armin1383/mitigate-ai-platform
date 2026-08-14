@@ -19,7 +19,7 @@ Environment="MITIGATE_AI_RUNTIME_BASE_URL=http://127.0.0.1:8765"
 Environment="OPENCLAW_HOME=/srv/mitigate/data/openclaw"
 Environment="OPENCLAW_STATE_DIR=/srv/mitigate/data/openclaw"
 
-ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.web.panel_server
+ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.web.panel_server_approval
 
 Restart=on-failure
 RestartSec=5
