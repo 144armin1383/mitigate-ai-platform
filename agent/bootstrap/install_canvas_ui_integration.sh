@@ -3,6 +3,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 ROOT="${MITIGATE_ROOT:-/srv/mitigate/mitigate-ai-platform}"
+DATA_ROOT="${MITIGATE_AI_DATA_ROOT:-/srv/mitigate/data}"
 NGINX_SITE="${MITIGATE_NGINX_ACCESS_SITE:-/etc/nginx/sites-available/mitigate-ai-access}"
 RUNTIME_ENV="${MITIGATE_RUNTIME_ENV:-/etc/mitigate-ai/runtime.env}"
 CANVAS_UPSTREAM="${MITIGATE_CANVAS_UPSTREAM:-http://127.0.0.1:8000}"
@@ -13,6 +14,7 @@ APPROVAL_SOURCE_SNIPPET="$ROOT/agent/deploy/nginx/mitigate-ai-canvas-approval.co
 STATIC_DIR="/usr/local/share/mitigate-ai"
 RUNTIME_STATIC_JS="$STATIC_DIR/mitigate-runtime-overlay.js"
 APPROVAL_STATIC_JS="$STATIC_DIR/mitigate-approval-overlay.js"
+APPROVAL_STATE_DIR="$DATA_ROOT/runtime/approvals"
 
 INTEGRATION_SNIPPET="/etc/nginx/snippets/mitigate-ai-canvas-integration.conf"
 APPROVAL_SNIPPET="/etc/nginx/snippets/mitigate-ai-canvas-approval.conf"
@@ -31,6 +33,7 @@ die() {
 [[ -f "$APPROVAL_SOURCE_SNIPPET" ]] || die "Approval Nginx source missing."
 [[ -f "$NGINX_SITE" ]] || die "Nginx access site missing."
 [[ -f "$RUNTIME_ENV" ]] || die "Runtime environment missing."
+[[ -d "$DATA_ROOT/runtime" ]] || die "Runtime state directory missing."
 
 PANEL_USER="$(awk -F= '$1=="MITIGATE_AI_PANEL_USERNAME" {sub(/^[^=]*=/, ""); gsub(/^["'\'' ]+|["'\'' ]+$/, ""); print; exit}' "$RUNTIME_ENV")"
 PANEL_PASS="$(awk -F= '$1=="MITIGATE_AI_PANEL_PASSWORD" {sub(/^[^=]*=/, ""); gsub(/^["'\'' ]+|["'\'' ]+$/, ""); print; exit}' "$RUNTIME_ENV")"
@@ -39,6 +42,13 @@ PANEL_PASS="$(awk -F= '$1=="MITIGATE_AI_PANEL_PASSWORD" {sub(/^[^=]*=/, ""); gsu
 [[ -n "$PANEL_PASS" ]] || die "Panel password missing."
 
 install -d -m 0755 "$STATIC_DIR" "$BACKUP_DIR"
+
+# Decision history is written by the same non-root account that owns the
+# durable runtime state. Derive numeric ownership instead of hard-coding ubuntu
+# so fresh-server deployments remain portable.
+RUNTIME_UID="$(stat -c '%u' "$DATA_ROOT/runtime")"
+RUNTIME_GID="$(stat -c '%g' "$DATA_ROOT/runtime")"
+install -d -o "$RUNTIME_UID" -g "$RUNTIME_GID" -m 0700 "$APPROVAL_STATE_DIR"
 
 for path in "$INTEGRATION_SNIPPET" "$APPROVAL_SNIPPET" "$RUNTIME_STATIC_JS" "$APPROVAL_STATIC_JS"; do
     if [[ -f "$path" ]]; then
@@ -134,6 +144,7 @@ fi
 echo "CANVAS_UI_INTEGRATION_INSTALLED=yes"
 echo "MITIGATE_RUNTIME_OVERLAY=ACTIVE"
 echo "MITIGATE_APPROVAL_OVERLAY=ACTIVE"
+echo "MITIGATE_APPROVAL_AUDIT_STORAGE=ACTIVE"
 echo "MITIGATE_STANDALONE_PANEL=REMOVED"
 echo "UPSTREAM_CANVAS_FILES_MODIFIED=no"
 echo "CANVAS_UPDATE_SURVIVAL=repository_managed_nginx_overlay"

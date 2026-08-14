@@ -12,6 +12,7 @@ on:
       - 'agent/deploy/systemd/mitigate-ai-panel.service'
       - 'agent/maintenance/activate_isolated_mission_runtime.sh'
       - 'agent/maintenance/activate_openclaw_worker_compat.sh'
+      - 'agent/maintenance/reconcile_manual_review_approvals.py'
       - 'agent/tests/test_isolated_mission_runtime.py'
       - 'agent/tests/test_autonomous_operator_runtime.py'
       - 'agent/tests/test_host_recovery_supervisor.py'
@@ -26,6 +27,7 @@ on:
       - 'agent/tests/test_mcp_read_only_classifier.py'
       - 'agent/tests/test_manual_review_status.py'
       - 'agent/tests/test_manual_review_approval.py'
+      - 'agent/tests/test_manual_review_reconciliation.py'
       - 'agent/tests/test_canvas_approval_integration.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
@@ -38,6 +40,7 @@ on:
       - 'agent/deploy/systemd/mitigate-ai-panel.service'
       - 'agent/maintenance/activate_isolated_mission_runtime.sh'
       - 'agent/maintenance/activate_openclaw_worker_compat.sh'
+      - 'agent/maintenance/reconcile_manual_review_approvals.py'
       - 'agent/tests/test_isolated_mission_runtime.py'
       - 'agent/tests/test_autonomous_operator_runtime.py'
       - 'agent/tests/test_host_recovery_supervisor.py'
@@ -52,6 +55,7 @@ on:
       - 'agent/tests/test_mcp_read_only_classifier.py'
       - 'agent/tests/test_manual_review_status.py'
       - 'agent/tests/test_manual_review_approval.py'
+      - 'agent/tests/test_manual_review_reconciliation.py'
       - 'agent/tests/test_canvas_approval_integration.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
@@ -91,6 +95,7 @@ jobs:
             agent/runtime/runtime_consolidation_controller.py \
             agent/runtime/runtime_mcp_server.py \
             agent/runtime/runtime_mcp_server_extended.py \
+            agent/maintenance/reconcile_manual_review_approvals.py \
             agent/web/panel_server.py \
             agent/web/panel_server_approval.py \
             agent/tests/test_isolated_mission_runtime.py \
@@ -107,6 +112,7 @@ jobs:
             agent/tests/test_mcp_read_only_classifier.py \
             agent/tests/test_manual_review_status.py \
             agent/tests/test_manual_review_approval.py \
+            agent/tests/test_manual_review_reconciliation.py \
             agent/tests/test_canvas_approval_integration.py
       - name: Check shell integration
         run: |
@@ -114,6 +120,7 @@ jobs:
           bash -n agent/bootstrap/enable_runtime_consolidation.sh
           bash -n agent/bootstrap/disable_runtime_consolidation.sh
           bash -n agent/bootstrap/install_canvas_approval_integration.sh
+          bash -n agent/bootstrap/install_canvas_ui_integration.sh
           bash -n agent/maintenance/activate_isolated_mission_runtime.sh
           bash -n agent/maintenance/activate_openclaw_worker_compat.sh
           bash -n agent/execution/openclaw_compat_wrapper.sh
@@ -134,5 +141,6 @@ jobs:
             agent.tests.test_mcp_read_only_classifier \
             agent.tests.test_manual_review_status \
             agent.tests.test_manual_review_approval \
+            agent.tests.test_manual_review_reconciliation \
             agent.tests.test_canvas_approval_integration \
             -v
