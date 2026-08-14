@@ -11,13 +11,39 @@ from agent.execution.openhands_adapter import OpenHandsRuntimeAdapter
 from agent.execution.runtime_adapter import ExecutionRequest
 
 
-class ExternalOpenHandsRunner:
-    """Run OpenHands from the managed external runtime environment.
+class ManagedOpenHandsProcessError(RuntimeError):
+    """Structured failure from the independently managed OpenHands process."""
 
-    The MITIGATE worker intentionally has a small Python environment. OpenHands is
-    installed and upgraded independently under the external-runtime root, so coding
-    missions must invoke that managed interpreter instead of assuming the SDK is
-    installed in the worker venv.
+    def __init__(
+        self,
+        code: str,
+        *,
+        returncode: int | None = None,
+        stdout: str = "",
+        stderr: str = "",
+    ) -> None:
+        self.code = str(code or "managed_openhands_execution_failed")[:200]
+        self.returncode = returncode
+        self.stdout = str(stdout or "")[-4000:]
+        self.stderr = str(stderr or "")[-4000:]
+        detail = self.stderr or self.stdout
+        super().__init__(self.code + (":" + detail[:2500] if detail else ""))
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            "error_code": self.code,
+            "returncode": self.returncode,
+            "stdout_tail": self.stdout,
+            "stderr_tail": self.stderr,
+        }
+
+
+class ExternalOpenHandsRunner:
+    """Run OpenHands from its managed external venv in a disposable worktree.
+
+    The subprocess working directory is always the MITIGATE-provided disposable
+    workspace. Canonical main is used only as the immutable location of this
+    small runner script; it is never the external provider's working directory.
     """
 
     def __init__(
@@ -33,13 +59,34 @@ class ExternalOpenHandsRunner:
             or "/srv/mitigate/external-runtimes/venv/bin/python"
         ).strip()
         self.python_path = Path(configured).expanduser().resolve()
+        self.runner_script = (
+            self.repository_root
+            / "agent"
+            / "execution"
+            / "openhands_subprocess_runner.py"
+        ).resolve()
 
     def available(self) -> bool:
-        return self.python_path.is_file() and os.access(self.python_path, os.X_OK)
+        return (
+            self.python_path.is_file()
+            and os.access(self.python_path, os.X_OK)
+            and self.runner_script.is_file()
+        )
+
+    @staticmethod
+    def _safe_workspace(workspace: Path) -> Path:
+        resolved = Path(workspace).expanduser().resolve()
+        if not resolved.is_dir():
+            raise ManagedOpenHandsProcessError("managed_openhands_workspace_unavailable")
+        return resolved
 
     def __call__(self, *, request: ExecutionRequest, workspace: Path) -> Any:
         if not self.available():
-            raise RuntimeError("managed_openhands_python_unavailable")
+            raise ManagedOpenHandsProcessError("managed_openhands_runtime_unavailable")
+
+        workspace = self._safe_workspace(workspace)
+        if workspace == self.repository_root:
+            raise ManagedOpenHandsProcessError("managed_openhands_refuses_canonical_workspace")
 
         prompt = OpenHandsRuntimeAdapter._prompt(request)
         payload = {
@@ -60,36 +107,57 @@ class ExternalOpenHandsRunner:
             payload,
             separators=(",", ":"),
         )
+        # Keep Git/runtime tools deterministic and stop user-level Git config
+        # warnings from influencing a provider run.
+        env.setdefault("GIT_CONFIG_NOSYSTEM", "0")
+        env["GIT_OPTIONAL_LOCKS"] = "0"
 
-        proc = subprocess.run(
-            [
-                str(self.python_path),
-                "-m",
-                "agent.execution.openhands_subprocess_runner",
-                "--workspace",
-                str(workspace),
-            ],
-            cwd=self.repository_root,
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=max(30, int(request.timeout_seconds)),
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                [
+                    str(self.python_path),
+                    str(self.runner_script),
+                    "--workspace",
+                    str(workspace),
+                ],
+                cwd=workspace,
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=max(30, int(request.timeout_seconds)),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("managed_openhands_timeout") from exc
+        except OSError as exc:
+            raise ManagedOpenHandsProcessError(
+                "managed_openhands_process_start_failed",
+                stderr=str(exc),
+            ) from exc
 
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
         if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()[-3000:]
-            lowered = detail.lower()
-            if "insufficient_quota" in lowered or "credit_balance_exhausted" in lowered:
-                raise RuntimeError("openhands_llm_quota_exhausted")
-            if "configured_llm_api_key_is_unavailable" in lowered:
-                raise RuntimeError("openhands_llm_credentials_unavailable")
-            raise RuntimeError(
-                "managed_openhands_execution_failed:" + detail[:2500]
+            detail = (stderr or stdout).lower()
+            if "insufficient_quota" in detail or "credit_balance_exhausted" in detail:
+                code = "openhands_llm_quota_exhausted"
+            elif "configured_llm_api_key_is_unavailable" in detail:
+                code = "openhands_llm_credentials_unavailable"
+            elif "modulenotfounderror" in detail or "importerror" in detail:
+                code = "managed_openhands_runtime_incompatible"
+            elif "permission denied" in detail:
+                code = "managed_openhands_permission_denied"
+            else:
+                code = "managed_openhands_execution_failed"
+            raise ManagedOpenHandsProcessError(
+                code,
+                returncode=proc.returncode,
+                stdout=stdout,
+                stderr=stderr,
             )
 
         run_id = None
-        for line in reversed(proc.stdout.splitlines()):
+        for line in reversed(stdout.splitlines()):
             line = line.strip()
             if not line:
                 continue
@@ -103,7 +171,15 @@ class ExternalOpenHandsRunner:
                     run_id = str(candidate)
                     break
 
-        return SimpleNamespace(id=run_id)
+        return SimpleNamespace(
+            id=run_id,
+            provider_metadata={
+                "working_directory": str(workspace),
+                "returncode": proc.returncode,
+                "stdout_tail": stdout[-2000:],
+                "stderr_tail": stderr[-2000:],
+            },
+        )
 
 
-__all__ = ["ExternalOpenHandsRunner"]
+__all__ = ["ExternalOpenHandsRunner", "ManagedOpenHandsProcessError"]
