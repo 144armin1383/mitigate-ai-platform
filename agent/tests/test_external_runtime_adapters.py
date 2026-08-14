@@ -20,11 +20,14 @@ def request(**metadata):
 
 
 class ExternalRuntimeAdapterTests(unittest.TestCase):
-    def test_openclaw_is_explicit_capability_only(self) -> None:
-        adapter = OpenClawRuntimeAdapter(runner=lambda **_: None)
+    def test_openclaw_injected_runner_supports_governed_coding(self) -> None:
+        adapter = OpenClawRuntimeAdapter(
+            runner=lambda **_: SimpleNamespace(session_id="oc-code-1")
+        )
         result = adapter.execute(request())
-        self.assertEqual(RuntimeStatus.blocked, result.status)
-        self.assertEqual("openclaw_requires_explicit_capability_task", result.reason)
+        self.assertEqual(RuntimeStatus.succeeded, result.status)
+        self.assertEqual("openclaw", result.provider)
+        self.assertEqual("oc-code-1", result.evidence.provider_run_id)
 
     def test_openclaw_injected_runner_normalizes_success(self) -> None:
         adapter = OpenClawRuntimeAdapter(
