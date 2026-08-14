@@ -39,7 +39,17 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             "printf 'PWD=%s\\n' \"$PWD\"\n"
             "printf 'WORKSPACE=%s\\n' \"${OPENCLAW_WORKSPACE_DIR:-}\"\n"
             "printf 'MODE=%s\\n' \"${MITIGATE_OPENCLAW_EXEC_MODE:-}\"\n"
-            "printf 'ARGS=%s\\n' \"$*\"\n",
+            "printf 'ARGS=%s\\n' \"$*\"\n"
+            "prev=''\n"
+            "for arg in \"$@\"; do\n"
+            "  if [[ \"$prev\" == \"--message-file\" ]]; then\n"
+            "    printf 'MESSAGE_FILE=%s\\n' \"$arg\"\n"
+            "    printf 'MESSAGE='\n"
+            "    cat \"$arg\"\n"
+            "    printf '\\n'\n"
+            "  fi\n"
+            "  prev=\"$arg\"\n"
+            "done\n",
             encoding="utf-8",
         )
         path.chmod(0o755)
@@ -88,7 +98,7 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
                     "--message-file", "-", "--cwd", str(workspace), "--json",
                 ],
                 text=True,
-                input="probe",
+                input="probe\nmultiline",
                 capture_output=True,
                 env={
                     **os.environ,
@@ -103,7 +113,9 @@ class OpenClawWorkerCompatTests(unittest.TestCase):
             self.assertIn(f"WORKSPACE={workspace.resolve()}", proc.stdout)
             self.assertIn("MODE=agent-local-compat", proc.stdout)
             self.assertIn("ARGS=agent --session-key mitigate-m-stable-test", proc.stdout)
-            self.assertIn("--local --message-file - --json", proc.stdout)
+            self.assertIn("--local --message-file /tmp/mitigate-openclaw-prompt.", proc.stdout)
+            self.assertIn("MESSAGE=probe\nmultiline", proc.stdout)
+            self.assertNotIn("--message-file -", proc.stdout)
             self.assertNotIn("agent exec", proc.stdout)
 
     def test_wrapper_reports_stable_local_cli_healthy(self) -> None:
