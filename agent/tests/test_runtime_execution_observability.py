@@ -9,13 +9,23 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent.execution.external_openhands_runner import ExternalOpenHandsRunner
-from agent.execution.runtime_adapter import ExecutionRequest
+from agent.execution.openclaw_adapter import OpenClawRuntimeAdapter
+from agent.execution.runtime_adapter import (
+    ExecutionEvidence,
+    ExecutionRequest,
+    ExecutionResult,
+    RuntimeStatus,
+)
 from agent.runtime.managed_workspace_mission_controller import ManagedWorkspaceMissionController
 from agent.runtime.runtime_mcp_server_extended import _infer_task_type
+from agent.runtime.workspace_production_mission_controller import WorkspaceProductionMissionController
 
 
 class RuntimeExecutionObservabilityTests(unittest.TestCase):
-    def _request(self, repo: Path) -> ExecutionRequest:
+    def _request(self, repo: Path, *, workspace: Path | None = None) -> ExecutionRequest:
+        metadata = {"model": "gpt-test"}
+        if workspace is not None:
+            metadata["workspace_root"] = str(workspace)
         return ExecutionRequest(
             request_id="r1",
             mission_id="m1",
@@ -24,7 +34,7 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
             base_revision="main",
             allowed_paths=("agent",),
             timeout_seconds=60,
-            metadata={"model": "gpt-test"},
+            metadata=metadata,
         )
 
     def _runner_fixture(self, root: Path) -> tuple[Path, Path, Path, ExternalOpenHandsRunner]:
@@ -178,6 +188,71 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "managed_openhands_runtime_incompatible"):
                     runner(request=self._request(repo), workspace=workspace)
             self.assertEqual(1, mocked.call_count)
+
+    def test_openclaw_agent_exec_is_scoped_to_disposable_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            workspace = root / "workspace"
+            binary = root / "openclaw"
+            repo.mkdir()
+            workspace.mkdir()
+            binary.write_text("#!/bin/sh\n", encoding="utf-8")
+            binary.chmod(0o700)
+            adapter = OpenClawRuntimeAdapter(binary=str(binary))
+
+            agent_result = SimpleNamespace(
+                returncode=0,
+                stdout='{"runId":"oc-run-1"}\n',
+                stderr="",
+            )
+            git_result = SimpleNamespace(
+                returncode=0,
+                stdout=" M agent/example.py\n",
+                stderr="",
+            )
+            with patch(
+                "agent.execution.openclaw_adapter.subprocess.run",
+                side_effect=[agent_result, git_result],
+            ) as mocked:
+                result = adapter.execute(self._request(repo, workspace=workspace))
+
+            self.assertEqual(RuntimeStatus.succeeded, result.status)
+            self.assertEqual("openclaw", result.provider)
+            self.assertIn("agent/example.py", result.evidence.changed_files)
+            agent_call = mocked.call_args_list[0]
+            argv = agent_call.args[0]
+            self.assertEqual(
+                [
+                    str(binary), "agent", "exec", "--message-file", "-",
+                    "--cwd", str(workspace.resolve()), "--json",
+                ],
+                argv,
+            )
+            self.assertEqual(workspace.resolve(), Path(agent_call.kwargs["cwd"]).resolve())
+            self.assertNotEqual(repo.resolve(), Path(agent_call.kwargs["cwd"]).resolve())
+
+    def test_openhands_integration_failure_triggers_provider_fallback(self) -> None:
+        result = ExecutionResult(
+            status=RuntimeStatus.failed,
+            provider="openhands",
+            retryable=False,
+            reason="managed_openhands_runtime_incompatible",
+            evidence=ExecutionEvidence(),
+        )
+        self.assertTrue(
+            WorkspaceProductionMissionController._should_fallback_from_openhands(result)
+        )
+        unrelated = ExecutionResult(
+            status=RuntimeStatus.failed,
+            provider="openhands",
+            retryable=False,
+            reason="openhands_llm_quota_exhausted",
+            evidence=ExecutionEvidence(),
+        )
+        self.assertFalse(
+            WorkspaceProductionMissionController._should_fallback_from_openhands(unrelated)
+        )
 
     def test_failure_evidence_is_persisted_before_retry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
