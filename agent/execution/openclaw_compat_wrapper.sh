@@ -93,12 +93,21 @@ if [[ ${1:-} == "agent" && ${2:-} == "exec" ]]; then
     exit 64
   fi
 
-  # OpenClaw v2026.7.1-2 does not yet expose `agent exec`, but its documented
-  # embedded `agent --local` path supports message-file input and a workspace
-  # override through OPENCLAW_WORKSPACE_DIR. Translate only the narrow command
-  # shape emitted by MITIGATE; reject unknown arguments instead of silently
-  # weakening the execution boundary.
+  # Stable OpenClaw supports `agent --local --message-file <path>`, but unlike
+  # MITIGATE's native agent-exec contract it does not interpret
+  # `--message-file -` as stdin. Materialize stdin into a private ephemeral
+  # file outside the repository, pass the real pathname to OpenClaw, and remove
+  # it on every exit path. This avoids polluting the disposable Git workspace
+  # while preserving multiline prompts without shell argument-size limits.
   local_args=()
+  prompt_tmp=""
+  cleanup_prompt() {
+    if [[ -n "$prompt_tmp" ]]; then
+      rm -f -- "$prompt_tmp"
+    fi
+  }
+  trap cleanup_prompt EXIT INT TERM
+
   for ((i=2; i<${#filtered[@]}; i++)); do
     case "${filtered[$i]}" in
       --message-file)
@@ -106,7 +115,18 @@ if [[ ${1:-} == "agent" && ${2:-} == "exec" ]]; then
           echo "--message-file requires a value" >&2
           exit 2
         }
-        local_args+=("--message-file" "${filtered[$((i+1))]}")
+        message_file="${filtered[$((i+1))]}"
+        if [[ "$message_file" == "-" ]]; then
+          prompt_tmp="$(mktemp "${TMPDIR:-/tmp}/mitigate-openclaw-prompt.XXXXXX")"
+          chmod 600 "$prompt_tmp"
+          cat >"$prompt_tmp"
+          [[ -s "$prompt_tmp" ]] || {
+            echo "MITIGATE OpenClaw prompt stdin was empty" >&2
+            exit 2
+          }
+          message_file="$prompt_tmp"
+        fi
+        local_args+=("--message-file" "$message_file")
         ((i++))
         ;;
       --json)
@@ -131,10 +151,15 @@ if [[ ${1:-} == "agent" && ${2:-} == "exec" ]]; then
   session="${session:0:120}"
   export OPENCLAW_WORKSPACE_DIR="$resolved"
   export MITIGATE_OPENCLAW_EXEC_MODE="agent-local-compat"
-  exec "$REAL_BINARY" agent \
+
+  set +e
+  "$REAL_BINARY" agent \
     --session-key "$session" \
     --local \
     "${local_args[@]}"
+  rc=$?
+  set -e
+  exit "$rc"
 fi
 
 exec "$REAL_BINARY" "${filtered[@]}"
