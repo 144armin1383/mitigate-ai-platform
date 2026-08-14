@@ -31,14 +31,18 @@ class AutonomousOperatorRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             python_path = root / "python"
+            runner_script = root / "agent" / "execution" / "openhands_subprocess_runner.py"
             python_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             python_path.chmod(0o700)
+            runner_script.parent.mkdir(parents=True)
+            runner_script.write_text("# managed runner\n", encoding="utf-8")
             runner = ExternalOpenHandsRunner(
                 repository_root=root,
                 python_path=python_path,
             )
             self.assertTrue(runner.available())
             self.assertEqual(runner.python_path, python_path.resolve())
+            self.assertEqual(runner.runner_script, runner_script.resolve())
 
     def test_diagnostics_read_durable_definition_outside_git(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
