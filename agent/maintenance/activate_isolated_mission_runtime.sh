@@ -28,6 +28,7 @@ python3 -m py_compile \
   agent/execution/external_openhands_runner.py \
   agent/execution/managed_openhands_adapter.py \
   agent/execution/openhands_subprocess_runner.py \
+  agent/execution/openclaw_adapter.py \
   agent/runtime/runtime_mcp_server_extended.py \
   agent/tests/test_isolated_mission_runtime.py \
   agent/tests/test_autonomous_operator_runtime.py \
@@ -52,6 +53,11 @@ from openhands.tools.terminal import TerminalTool
 print("MANAGED_OPENHANDS_API_IMPORTS=OK")
 print("MANAGED_OPENHANDS_TOOL_IMPORTS=OK")
 PY
+
+OPENCLAW_BINARY="${MITIGATE_OPENCLAW_BINARY:-/srv/mitigate/external-runtimes/npm/node_modules/.bin/openclaw}"
+test -x "$OPENCLAW_BINARY"
+"$OPENCLAW_BINARY" agent exec --help >/dev/null
+printf 'MANAGED_OPENCLAW_AGENT_EXEC=OK\n'
 
 install -d -m 0700 "$BACKUP_DIR"
 cp -a "$API_UNIT" "$BACKUP_DIR/" 2>/dev/null || true
@@ -124,6 +130,7 @@ Environment="MITIGATE_AI_MISSION_DEFINITION_ROOT=/srv/mitigate/data/runtime/miss
 Environment="MITIGATE_AI_AUTONOMOUS_MAX_RETRIES=2"
 Environment="MITIGATE_AI_RECOVERY_CHAIN_LIMIT=2"
 Environment="MITIGATE_OPENHANDS_PYTHON=/srv/mitigate/external-runtimes/venv/bin/python"
+Environment="MITIGATE_OPENCLAW_BINARY=/srv/mitigate/external-runtimes/npm/node_modules/.bin/openclaw"
 ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.workspace_worker_entrypoint --queue-path /srv/mitigate/data/runtime/missions.json --worker-id production-worker --poll-interval 5 --heartbeat-path /srv/mitigate/data/runtime/worker.heartbeat
 Restart=on-failure
 RestartSec=5s
@@ -189,6 +196,8 @@ echo "MITIGATE_HOST_RECOVERY_SUPERVISOR=ACTIVE"
 echo "MITIGATE_RECOVERY_CHAIN_LIMIT=2"
 echo "MITIGATE_GIT_DIAGNOSTICS_WARNING_ISOLATION=ACTIVE"
 echo "MITIGATE_OPENHANDS_DISPOSABLE_CWD=ACTIVE"
+echo "MITIGATE_OPENCLAW_CODING_FALLBACK=ACTIVE"
+echo "MITIGATE_PROVIDER_FAILOVER=openhands->openclaw"
 echo "MITIGATE_FAILURE_EVIDENCE=ACTIVE"
 echo "MITIGATE_INTENT_CLASSIFIER_V2=ACTIVE"
 echo "SYSTEMD_BACKUP_DIR=$BACKUP_DIR"
