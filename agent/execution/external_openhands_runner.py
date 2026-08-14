@@ -42,9 +42,9 @@ class ExternalOpenHandsRunner:
         if configured_state:
             state_root = Path(configured_state)
         elif production_data_root.is_dir():
-            state_root = production_data_root / "openhands"
+            state_root = production_data_root / "openhands-runtime"
         else:
-            state_root = Path(tempfile.gettempdir()) / "mitigate-openhands"
+            state_root = Path(tempfile.gettempdir()) / "mitigate-openhands-runtime"
         self.state_root = state_root.expanduser().absolute()
 
     def available(self) -> bool:
@@ -96,8 +96,8 @@ class ExternalOpenHandsRunner:
         env["OPENHANDS_SUPPRESS_BANNER"] = "1"
 
         # ProtectHome=true intentionally makes /home/ubuntu unavailable to the
-        # worker. Keep OpenHands profiles/cache/state in MITIGATE's writable
-        # data root instead of allowing the SDK to fall back to ~/.openhands.
+        # worker. Keep production OpenHands state isolated from Agent Canvas,
+        # which uses a separate persistent tree owned by its container UID.
         env["HOME"] = str(self.state_root)
         env["XDG_CONFIG_HOME"] = str(self.state_root / ".config")
         env["XDG_CACHE_HOME"] = str(self.state_root / ".cache")
@@ -109,9 +109,6 @@ class ExternalOpenHandsRunner:
         return env
 
     def _preflight(self, *, workspace: Path, env: dict[str, str], timeout: int) -> dict[str, Any]:
-        # `openhands` itself is a namespace package, so its spec.origin may be
-        # None even when the SDK is installed. Probe the concrete public module
-        # that production execution imports.
         probe = (
             "import importlib.util,json,site,sys;"
             "sdk=importlib.util.find_spec('openhands.sdk');"
