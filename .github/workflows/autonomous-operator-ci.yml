@@ -20,6 +20,7 @@ on:
       - 'agent/tests/test_openhands_managed_home.py'
       - 'agent/tests/test_openhands_timeout_cleanup.py'
       - 'agent/tests/test_read_only_mission_completion.py'
+      - 'agent/tests/test_mcp_read_only_classifier.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
     paths:
@@ -39,6 +40,7 @@ on:
       - 'agent/tests/test_openhands_managed_home.py'
       - 'agent/tests/test_openhands_timeout_cleanup.py'
       - 'agent/tests/test_read_only_mission_completion.py'
+      - 'agent/tests/test_mcp_read_only_classifier.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
 permissions:
@@ -73,6 +75,7 @@ jobs:
             agent/runtime/workspace_production_mission_controller.py \
             agent/runtime/production_runtime_api_isolated.py \
             agent/runtime/runtime_consolidation_controller.py \
+            agent/runtime/runtime_mcp_server.py \
             agent/runtime/runtime_mcp_server_extended.py \
             agent/tests/test_isolated_mission_runtime.py \
             agent/tests/test_autonomous_operator_runtime.py \
@@ -84,7 +87,8 @@ jobs:
             agent/tests/test_openclaw_worker_compat.py \
             agent/tests/test_openhands_managed_home.py \
             agent/tests/test_openhands_timeout_cleanup.py \
-            agent/tests/test_read_only_mission_completion.py
+            agent/tests/test_read_only_mission_completion.py \
+            agent/tests/test_mcp_read_only_classifier.py
       - name: Check shell integration
         run: |
           bash -n agent/bootstrap/configure_openhands_mcp.sh
@@ -107,4 +111,5 @@ jobs:
             agent.tests.test_openhands_managed_home \
             agent.tests.test_openhands_timeout_cleanup \
             agent.tests.test_read_only_mission_completion \
+            agent.tests.test_mcp_read_only_classifier \
             -v
