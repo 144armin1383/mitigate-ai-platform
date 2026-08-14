@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from agent.execution.openhands_adapter import OpenHandsRuntimeAdapter
+from agent.execution.provider_task_policy import decide_provider, provider_contract
 from agent.execution.runtime_adapter import (
     ExecutionRequest,
-    RuntimeCapabilities,
     RuntimeRegistry,
     RuntimeStatus,
 )
@@ -35,7 +35,7 @@ class _MissionCompatibleRuntimePublisher(RuntimeBranchPublisher):
 
 
 class WorkspaceProductionMissionController(ProductionMissionController):
-    """Production controller using replaceable runtimes in disposable worktrees."""
+    """Production controller using specialized runtimes in disposable worktrees."""
 
     def __init__(
         self,
@@ -104,16 +104,12 @@ class WorkspaceProductionMissionController(ProductionMissionController):
 
     @staticmethod
     def _field(text: str, label: str) -> str:
-        match = re.search(
-            rf"^{re.escape(label)}:\s*(.+?)\s*$", text, re.MULTILINE
-        )
+        match = re.search(rf"^{re.escape(label)}:\s*(.+?)\s*$", text, re.MULTILINE)
         return match.group(1).strip() if match else ""
 
     @staticmethod
     def _objective(text: str) -> str:
-        match = re.search(
-            r"## Objective\s*\n\s*(.*?)(?=\n## |\Z)", text, re.DOTALL
-        )
+        match = re.search(r"## Objective\s*\n\s*(.*?)(?=\n## |\Z)", text, re.DOTALL)
         return match.group(1).strip() if match else text[:12000]
 
     def _mission_metadata(self, mission_name: str) -> dict[str, Any]:
@@ -141,15 +137,14 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             return (".github", "agent", "docs")
         if task_type in {"infrastructure", "deployment"}:
             return ("agent", ".github", "docs")
+        if task_type in {"frontend", "wordpress", "content"}:
+            return ("wordpress", "docs")
         return ("agent",)
 
     @staticmethod
     def _allows_no_changes(task_type: str) -> bool:
-        """Return True only for explicitly read-only mission classes."""
         return str(task_type or "").strip().lower() in {
-            "inspection",
-            "read_only",
-            "readonly",
+            "inspection", "read_only", "readonly",
         }
 
     @staticmethod
@@ -167,7 +162,6 @@ class WorkspaceProductionMissionController(ProductionMissionController):
 
     @staticmethod
     def _should_fallback_from_openhands(result: Any) -> bool:
-        """Compatibility wrapper; RuntimeRouter is the sole failover authority."""
         if str(getattr(result, "provider", "")).lower() != "openhands":
             return False
         return RuntimeRouter._can_failover(result)
@@ -194,11 +188,14 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             "backend", "frontend", "api", "testing", "documentation",
             "infrastructure", "security", "database", "fullstack",
             "bugfix", "maintenance", "refactor", "test", "tests", "github",
-            "deployment",
+            "deployment", "wordpress", "content", "seo", "inspection",
         }
         allowed_paths = deliverables
         if software_task and not allowed_paths:
             allowed_paths = self._default_allowed_paths(task_type, objective)
+
+        routing = decide_provider(task_type, objective)
+        provider_guidance = provider_contract(routing.preferred[0])
 
         request_id = str(
             metadata.get("request_id") or context.get("request_id") or mission_name
@@ -216,27 +213,28 @@ class WorkspaceProductionMissionController(ProductionMissionController):
                 "Implement the smallest architecture-consistent fix.",
                 "Run relevant automated tests and validation.",
                 "Do not commit, push or merge from the external runtime.",
+                *provider_guidance,
             ),
             timeout_seconds=self.timeout_seconds,
             metadata={
                 "task_type": task_type,
                 "model": os.environ.get("MITIGATE_OPENHANDS_MODEL", "gpt-5.5"),
+                "routing_rationale": routing.rationale,
+                "forced_provider": routing.forced_provider,
             },
-        )
-        requirements = RuntimeCapabilities(
-            coding=True,
-            terminal=True,
-            file_editing=True,
-            tests=True,
-            isolated_workspace=True,
         )
 
         result = self.router.execute(
             request,
-            require=requirements,
-            preferred=("openhands", "openclaw"),
+            require=routing.requirements,
+            preferred=routing.preferred,
         )
         runtime_evidence = self._runtime_evidence(result)
+        runtime_evidence["routing"] = {
+            "preferred": list(routing.preferred),
+            "forced_provider": routing.forced_provider,
+            "rationale": routing.rationale,
+        }
 
         if result.status == RuntimeStatus.succeeded:
             if not result.evidence.changed_files:
