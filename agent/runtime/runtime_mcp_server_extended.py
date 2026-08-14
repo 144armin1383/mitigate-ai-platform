@@ -152,6 +152,20 @@ def mitigate_autonomous_recovery(mission_id: str) -> dict[str, Any]:
     root_mission_id, depth = _recovery_lineage(objective, mission_id)
     depth_limit = _recovery_depth_limit()
 
+    if reason == "manual_review_required" or state == "awaiting_approval":
+        return {
+            "ok": True,
+            "action": "awaiting_approval",
+            "mission_id": mission_id,
+            "root_mission_id": root_mission_id,
+            "state": "awaiting_approval",
+            "queue_state": str(mission.get("queue_state") or "blocked") if isinstance(mission, dict) else "blocked",
+            "reason": "manual_review_required",
+            "requires_action": "manual_review",
+            "recovery_submitted": False,
+            "diagnostics": diagnostics,
+        }
+
     repository = diagnostics.get("repository") or {}
     if repository.get("clean") is False or "canonical_repository_not_clean" in reason:
         supervisor = HostRecoverySupervisor(
