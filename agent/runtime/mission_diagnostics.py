@@ -40,6 +40,20 @@ def _git(repo: Path, *args: str) -> dict[str, Any]:
     }
 
 
+def _dirty_entries(porcelain_output: str) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for raw in str(porcelain_output or "").splitlines():
+        if len(raw) < 4:
+            continue
+        entries.append({
+            "status": raw[:2],
+            "path": raw[3:][:500],
+        })
+        if len(entries) >= 50:
+            break
+    return entries
+
+
 def _mission_metadata(repo: Path, mission_id: str) -> dict[str, Any]:
     path = repo / "agent" / "missions" / f"{mission_id}.md"
     if not path.is_file():
@@ -149,12 +163,7 @@ def collect_mission_diagnostics(
     repository_root: str | Path | None = None,
     data_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Collect read-only, bounded diagnostics for one MITIGATE mission.
-
-    This helper never executes a mission, modifies Git state, or exposes arbitrary
-    file content. It reports only controlled repository state, mission metadata,
-    branch presence and selected structured runtime artifact fields.
-    """
+    """Collect read-only, bounded diagnostics for one MITIGATE mission."""
     mission_id = _safe_id(mission_id, "mission_id")
     repo = Path(
         repository_root
@@ -168,7 +177,7 @@ def collect_mission_diagnostics(
     ).resolve()
 
     branch = _git(repo, "branch", "--show-current")
-    porcelain = _git(repo, "status", "--porcelain")
+    porcelain = _git(repo, "status", "--porcelain", "--untracked-files=all")
     head = _git(repo, "rev-parse", "HEAD")
     branches = _git(
         repo,
@@ -185,7 +194,8 @@ def collect_mission_diagnostics(
             if mission_id in line
         ][:20]
 
-    clean = bool(porcelain.get("ok")) and not str(porcelain.get("output") or "").strip()
+    porcelain_output = str(porcelain.get("output") or "")
+    clean = bool(porcelain.get("ok")) and not porcelain_output.strip()
 
     return {
         "mission_id": mission_id,
@@ -195,6 +205,7 @@ def collect_mission_diagnostics(
             "branch": branch.get("output") if branch.get("ok") else None,
             "head": head.get("output") if head.get("ok") else None,
             "clean": clean,
+            "dirty_entries": _dirty_entries(porcelain_output),
             "mission_branches": branch_matches,
         },
         "mission_artifact": _mission_metadata(repo, mission_id),
