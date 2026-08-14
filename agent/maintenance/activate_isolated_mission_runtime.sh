@@ -16,10 +16,6 @@ BACKUP_DIR="/etc/mitigate-ai/systemd-backups/$STAMP"
 
 cd "$ROOT"
 
-# The production OpenHands worker runs as ubuntu while Agent Canvas runs in its
-# container as UID/GID 10001. Keep their persistent state roots separate so
-# fixing or provisioning one runtime can never change ownership underneath the
-# other. ProtectHome=true remains enabled for the worker.
 install -d -o ubuntu -g ubuntu -m 0700 "$OPENHANDS_STATE_ROOT"
 for relative in .config .cache .local .local/share .openhands; do
   install -d -o ubuntu -g ubuntu -m 0700 "$OPENHANDS_STATE_ROOT/$relative"
@@ -48,7 +44,8 @@ python3 -m py_compile \
   agent/tests/test_mission_diagnostics_git_warnings.py \
   agent/tests/test_runtime_execution_observability.py \
   agent/tests/test_runtime_router_failover.py \
-  agent/tests/test_openhands_managed_home.py
+  agent/tests/test_openhands_managed_home.py \
+  agent/tests/test_openhands_timeout_cleanup.py
 
 "$ROOT/agent/.venv/bin/python" -m unittest \
   agent.tests.test_isolated_mission_runtime \
@@ -57,7 +54,8 @@ python3 -m py_compile \
   agent.tests.test_mission_diagnostics_git_warnings \
   agent.tests.test_runtime_execution_observability \
   agent.tests.test_runtime_router_failover \
-  agent.tests.test_openhands_managed_home -v
+  agent.tests.test_openhands_managed_home \
+  agent.tests.test_openhands_timeout_cleanup -v
 
 OPENHANDS_PYTHON="${MITIGATE_OPENHANDS_PYTHON:-/srv/mitigate/external-runtimes/venv/bin/python}"
 OPENHANDS_OK=0
@@ -238,6 +236,7 @@ echo "MITIGATE_GIT_DIAGNOSTICS_WARNING_ISOLATION=ACTIVE"
 echo "MITIGATE_OPENHANDS_DISPOSABLE_CWD=ACTIVE"
 echo "MITIGATE_OPENHANDS_MANAGED_HOME=ACTIVE"
 echo "MITIGATE_OPENHANDS_STATE_ISOLATION=ACTIVE"
+echo "MITIGATE_OPENHANDS_TIMEOUT_CLEANUP=ACTIVE"
 echo "MITIGATE_PROVIDER_FAILOVER_ROUTER=ACTIVE"
 echo "MITIGATE_FAILURE_EVIDENCE=ACTIVE"
 echo "MITIGATE_INTENT_CLASSIFIER_V2=ACTIVE"
