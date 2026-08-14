@@ -10,6 +10,7 @@ on:
       - 'agent/maintenance/activate_isolated_mission_runtime.sh'
       - 'agent/tests/test_isolated_mission_runtime.py'
       - 'agent/tests/test_autonomous_operator_runtime.py'
+      - 'agent/tests/test_host_recovery_supervisor.py'
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
@@ -20,6 +21,7 @@ on:
       - 'agent/maintenance/activate_isolated_mission_runtime.sh'
       - 'agent/tests/test_isolated_mission_runtime.py'
       - 'agent/tests/test_autonomous_operator_runtime.py'
+      - 'agent/tests/test_host_recovery_supervisor.py'
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
@@ -46,6 +48,8 @@ jobs:
             agent/execution/managed_openhands_adapter.py \
             agent/runtime/autonomous_mission_queue.py \
             agent/runtime/autonomous_mission_diagnostics.py \
+            agent/runtime/host_recovery_supervisor.py \
+            agent/runtime/mission_diagnostics.py \
             agent/runtime/task_scope_workspace_controller.py \
             agent/runtime/managed_workspace_mission_controller.py \
             agent/runtime/production_runtime_api_isolated.py \
@@ -53,6 +57,7 @@ jobs:
             agent/runtime/runtime_mcp_server_extended.py \
             agent/tests/test_isolated_mission_runtime.py \
             agent/tests/test_autonomous_operator_runtime.py \
+            agent/tests/test_host_recovery_supervisor.py \
             agent/tests/test_runtime_consolidation_controller.py
       - name: Check shell integration
         run: |
@@ -65,5 +70,6 @@ jobs:
           python -m unittest \
             agent.tests.test_isolated_mission_runtime \
             agent.tests.test_autonomous_operator_runtime \
+            agent.tests.test_host_recovery_supervisor \
             agent.tests.test_runtime_consolidation_controller \
             -v
