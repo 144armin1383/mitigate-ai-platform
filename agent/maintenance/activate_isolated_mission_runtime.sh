@@ -29,35 +29,58 @@ python3 -m py_compile \
   agent/execution/managed_openhands_adapter.py \
   agent/execution/openhands_subprocess_runner.py \
   agent/execution/openclaw_adapter.py \
+  agent/execution/runtime_router.py \
   agent/runtime/runtime_mcp_server_extended.py \
   agent/tests/test_isolated_mission_runtime.py \
   agent/tests/test_autonomous_operator_runtime.py \
   agent/tests/test_host_recovery_supervisor.py \
   agent/tests/test_mission_diagnostics_git_warnings.py \
-  agent/tests/test_runtime_execution_observability.py
+  agent/tests/test_runtime_execution_observability.py \
+  agent/tests/test_runtime_router_failover.py
 
 "$ROOT/agent/.venv/bin/python" -m unittest \
   agent.tests.test_isolated_mission_runtime \
   agent.tests.test_autonomous_operator_runtime \
   agent.tests.test_host_recovery_supervisor \
   agent.tests.test_mission_diagnostics_git_warnings \
-  agent.tests.test_runtime_execution_observability -v
+  agent.tests.test_runtime_execution_observability \
+  agent.tests.test_runtime_router_failover -v
 
 OPENHANDS_PYTHON="${MITIGATE_OPENHANDS_PYTHON:-/srv/mitigate/external-runtimes/venv/bin/python}"
-test -x "$OPENHANDS_PYTHON"
-"$OPENHANDS_PYTHON" - <<'PY'
+OPENHANDS_OK=0
+if [[ -x "$OPENHANDS_PYTHON" ]]; then
+  if "$OPENHANDS_PYTHON" - <<'PY'
 from openhands.sdk import Agent, Conversation, LLM, Tool
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.task_tracker import TaskTrackerTool
 from openhands.tools.terminal import TerminalTool
-print("MANAGED_OPENHANDS_API_IMPORTS=OK")
-print("MANAGED_OPENHANDS_TOOL_IMPORTS=OK")
 PY
+  then
+    OPENHANDS_OK=1
+    echo "MANAGED_OPENHANDS_API_IMPORTS=OK"
+    echo "MANAGED_OPENHANDS_TOOL_IMPORTS=OK"
+  else
+    echo "MANAGED_OPENHANDS_IMPORTS=UNAVAILABLE"
+  fi
+else
+  echo "MANAGED_OPENHANDS_PYTHON=UNAVAILABLE"
+fi
 
 OPENCLAW_BINARY="${MITIGATE_OPENCLAW_BINARY:-/srv/mitigate/external-runtimes/npm/node_modules/.bin/openclaw}"
-test -x "$OPENCLAW_BINARY"
-"$OPENCLAW_BINARY" agent exec --help >/dev/null
-printf 'MANAGED_OPENCLAW_AGENT_EXEC=OK\n'
+OPENCLAW_OK=0
+if [[ -x "$OPENCLAW_BINARY" ]] && "$OPENCLAW_BINARY" agent exec --help >/dev/null 2>&1; then
+  OPENCLAW_OK=1
+  echo "MANAGED_OPENCLAW_AGENT_EXEC=OK"
+else
+  echo "MANAGED_OPENCLAW_AGENT_EXEC=UNAVAILABLE"
+fi
+
+if [[ "$OPENHANDS_OK" -ne 1 && "$OPENCLAW_OK" -ne 1 ]]; then
+  echo "ERROR: no healthy governed coding runtime is available" >&2
+  exit 1
+fi
+
+echo "MITIGATE_CODING_RUNTIME_PREFLIGHT=PASS"
 
 install -d -m 0700 "$BACKUP_DIR"
 cp -a "$API_UNIT" "$BACKUP_DIR/" 2>/dev/null || true
@@ -198,6 +221,7 @@ echo "MITIGATE_GIT_DIAGNOSTICS_WARNING_ISOLATION=ACTIVE"
 echo "MITIGATE_OPENHANDS_DISPOSABLE_CWD=ACTIVE"
 echo "MITIGATE_OPENCLAW_CODING_FALLBACK=ACTIVE"
 echo "MITIGATE_PROVIDER_FAILOVER=openhands->openclaw"
+echo "MITIGATE_PROVIDER_FAILOVER_ROUTER=ACTIVE"
 echo "MITIGATE_FAILURE_EVIDENCE=ACTIVE"
 echo "MITIGATE_INTENT_CLASSIFIER_V2=ACTIVE"
 echo "SYSTEMD_BACKUP_DIR=$BACKUP_DIR"
