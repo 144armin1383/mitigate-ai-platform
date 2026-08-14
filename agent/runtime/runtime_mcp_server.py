@@ -201,6 +201,54 @@ def _safe_identifier(value: str, *, field: str) -> str:
     return value
 
 
+def _explicit_read_only_inspection(message: str) -> bool:
+    """Recognize only high-confidence read-only inspection requests."""
+    text = " ".join(str(message or "").lower().split())
+    has_read_only = "read-only" in text or "read only" in text
+    has_inspection = any(
+        marker in text
+        for marker in (
+            "inspection",
+            "inspect the repository",
+            "inspect this repository",
+            "inspect repository",
+        )
+    )
+    forbids_changes = any(
+        marker in text
+        for marker in (
+            "do not modify any files",
+            "do not modify files",
+            "do not change any files",
+            "do not change files",
+            "without modifying any files",
+            "without modifying files",
+        )
+    )
+    writable_intent = any(
+        marker in text
+        for marker in (
+            "fix the bug",
+            "fix this bug",
+            "implement",
+            "modify the",
+            "change the",
+            "update the",
+            "create a file",
+            "delete a file",
+        )
+    )
+    return has_read_only and has_inspection and forbids_changes and not writable_intent
+
+
+def _effective_task_type(message: str, task_type: str) -> str:
+    """Correct the generic MCP default only for explicit read-only inspection."""
+    value = str(task_type or "").strip().lower()
+    if value == "backend" and _explicit_read_only_inspection(message):
+        return "inspection"
+    return value
+
+
 mcp = MCPServer(
     "MITIGATE Runtime Gateway",
     instructions=(
@@ -255,7 +303,7 @@ def mitigate_submit_mission(
     disposable workspace creation, Git governance, execution and reporting.
     """
     message = str(message or "").strip()
-    task_type = str(task_type or "").strip().lower()
+    task_type = _effective_task_type(message, task_type)
 
     if not message or len(message) > 60000:
         raise ValueError("invalid_mission_message")
