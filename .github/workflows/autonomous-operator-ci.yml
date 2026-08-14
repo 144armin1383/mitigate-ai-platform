@@ -17,6 +17,7 @@ on:
       - 'agent/tests/test_runtime_router_failover.py'
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - 'agent/tests/test_openclaw_worker_compat.py'
+      - 'agent/tests/test_openhands_managed_home.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
     paths:
@@ -33,6 +34,7 @@ on:
       - 'agent/tests/test_runtime_router_failover.py'
       - 'agent/tests/test_runtime_consolidation_controller.py'
       - 'agent/tests/test_openclaw_worker_compat.py'
+      - 'agent/tests/test_openhands_managed_home.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
 permissions:
@@ -75,7 +77,8 @@ jobs:
             agent/tests/test_runtime_execution_observability.py \
             agent/tests/test_runtime_router_failover.py \
             agent/tests/test_runtime_consolidation_controller.py \
-            agent/tests/test_openclaw_worker_compat.py
+            agent/tests/test_openclaw_worker_compat.py \
+            agent/tests/test_openhands_managed_home.py
       - name: Check shell integration
         run: |
           bash -n agent/bootstrap/configure_openhands_mcp.sh
@@ -95,4 +98,5 @@ jobs:
             agent.tests.test_runtime_router_failover \
             agent.tests.test_runtime_consolidation_controller \
             agent.tests.test_openclaw_worker_compat \
+            agent.tests.test_openhands_managed_home \
             -v
