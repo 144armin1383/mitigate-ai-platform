@@ -225,17 +225,20 @@ def _explicit_read_only_inspection(message: str) -> bool:
             "without modifying files",
         )
     )
+    # Only unambiguous write requests should defeat an otherwise explicit
+    # read-only inspection. Generic phrases such as "modify the" are unsafe
+    # here because Canvas constraints commonly contain negated text such as
+    # "do not directly inspect or modify the canonical checkout".
     writable_intent = any(
         marker in text
         for marker in (
             "fix the bug",
             "fix this bug",
-            "implement",
-            "modify the",
-            "change the",
-            "update the",
+            "implement the fix",
+            "implement this change",
             "create a file",
             "delete a file",
+            "write the code",
         )
     )
     return has_read_only and has_inspection and forbids_changes and not writable_intent
