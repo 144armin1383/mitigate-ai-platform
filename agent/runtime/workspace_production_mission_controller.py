@@ -144,6 +144,15 @@ class WorkspaceProductionMissionController(ProductionMissionController):
         return ("agent",)
 
     @staticmethod
+    def _allows_no_changes(task_type: str) -> bool:
+        """Return True only for explicitly read-only mission classes."""
+        return str(task_type or "").strip().lower() in {
+            "inspection",
+            "read_only",
+            "readonly",
+        }
+
+    @staticmethod
     def _runtime_evidence(result: Any) -> dict[str, Any]:
         evidence = result.evidence
         return {
@@ -231,6 +240,15 @@ class WorkspaceProductionMissionController(ProductionMissionController):
 
         if result.status == RuntimeStatus.succeeded:
             if not result.evidence.changed_files:
+                if self._allows_no_changes(task_type):
+                    return {
+                        "status": "success",
+                        "reason": "read_only_execution_completed",
+                        "provider": result.provider,
+                        "request_id": request_id,
+                        "task_type": task_type,
+                        "runtime_evidence": runtime_evidence,
+                    }
                 return {
                     "status": "blocked",
                     "reason": "runtime_produced_no_changes",
