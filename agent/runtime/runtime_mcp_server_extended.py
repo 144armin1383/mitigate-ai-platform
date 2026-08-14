@@ -23,18 +23,41 @@ _RECOVERY_MARKER_RE = re.compile(
 
 
 def _infer_task_type(message: str) -> str:
+    """Infer the primary user intent, not incidental words in task context."""
     text = str(message or "").lower()
+
+    # High-signal compound intents take precedence over incidental mentions.
+    if any(marker in text for marker in (
+        "build-vs-adopt assessment",
+        "runtime consolidation assessment",
+        "architecture assessment",
+        "architecture report",
+        "assessment document",
+    )):
+        return "documentation"
+    if any(marker in text for marker in (
+        "fix the bug", "fix this bug", "repair the bug", "debug", "bugfix",
+        "fix it autonomously", "find the problem", "resolve the failure",
+    )):
+        return "bugfix"
+    if any(marker in text for marker in ("deploy", "release", "production rollout")):
+        return "deployment"
+    if any(marker in text for marker in (
+        "security vulnerability", "security audit", "credential leak",
+        "secret exposure", "permission boundary", "security fix",
+    )):
+        return "security"
+
     rules = (
-        ("deployment", ("deploy", "release", "production rollout")),
-        ("security", ("security", "vulnerability", "permission", "secret")),
-        ("testing", ("test", "regression", "validation")),
-        ("documentation", ("document", "assessment", "architecture report", "readme")),
+        ("testing", ("regression test", "test suite", "validation test")),
+        ("documentation", ("document", "assessment", "readme")),
         ("frontend", ("frontend", "ui", "css", "react", "component")),
-        ("database", ("database", "schema", "migration", "sql")),
-        ("infrastructure", ("systemd", "nginx", "server", "infrastructure", "runtime")),
+        ("database", ("database", "schema", "sql")),
+        ("infrastructure", ("systemd", "nginx", "server", "infrastructure", "runtime service")),
         ("wordpress", ("wordpress", "woocommerce", "plugin", "theme")),
         ("seo", ("seo", "sitemap", "robots", "canonical url")),
-        ("github", ("github", "branch", "pull request", "workflow")),
+        ("github", ("github", "pull request", "workflow")),
+        ("security", ("vulnerability", "security")),
     )
     for task_type, markers in rules:
         if any(marker in text for marker in markers):
@@ -99,22 +122,12 @@ def mitigate_mission_diagnostics(mission_id: str) -> dict[str, Any]:
         repository_root=os.environ.get("MITIGATE_AI_REPOSITORY_ROOT"),
         data_root=os.environ.get("MITIGATE_AI_DATA_ROOT"),
     )
-    return {
-        "ok": True,
-        "mission": mission.get("data", mission),
-        "diagnostics": diagnostics,
-    }
+    return {"ok": True, "mission": mission.get("data", mission), "diagnostics": diagnostics}
 
 
 @mcp.tool()
 def mitigate_autonomous_recovery(mission_id: str) -> dict[str, Any]:
-    """Diagnose a failed mission and take one bounded safe recovery action.
-
-    Recovery is finite. MITIGATE may retry normal execution, quarantine only
-    provably generated runtime artifacts, or submit a governed repair mission.
-    Unknown canonical changes, credentials, billing, approvals and destructive
-    boundaries stop with precise evidence rather than looping indefinitely.
-    """
+    """Diagnose a failed mission and take one bounded safe recovery action."""
     mission_id = _safe_identifier(mission_id, field="mission_id")
     status_payload = _runtime_api_request(
         "/v1/missions/" + urllib.parse.quote(mission_id, safe=""),
@@ -129,13 +142,7 @@ def mitigate_autonomous_recovery(mission_id: str) -> dict[str, Any]:
     )
 
     if state in {"pending", "running", "retrying"}:
-        return {
-            "ok": True,
-            "action": "wait",
-            "mission_id": mission_id,
-            "state": state,
-            "diagnostics": diagnostics,
-        }
+        return {"ok": True, "action": "wait", "mission_id": mission_id, "state": state, "diagnostics": diagnostics}
 
     failure = diagnostics.get("failure_evidence") or {}
     reason = str(failure.get("reason") or "").lower()
@@ -153,99 +160,29 @@ def mitigate_autonomous_recovery(mission_id: str) -> dict[str, Any]:
         )
         host_recovery = supervisor.recover(mission_id)
         if not host_recovery.get("ok"):
-            return {
-                "ok": True,
-                "action": "terminal_blocker",
-                "mission_id": mission_id,
-                "root_mission_id": root_mission_id,
-                "state": state,
-                "reason": host_recovery.get("reason"),
-                "host_recovery": host_recovery,
-                "diagnostics": diagnostics,
-            }
+            return {"ok": True, "action": "terminal_blocker", "mission_id": mission_id, "root_mission_id": root_mission_id, "state": state, "reason": host_recovery.get("reason"), "host_recovery": host_recovery, "diagnostics": diagnostics}
         if not objective:
-            return {
-                "ok": True,
-                "action": "host_recovered_diagnostics_only",
-                "mission_id": mission_id,
-                "root_mission_id": root_mission_id,
-                "host_recovery": host_recovery,
-                "diagnostics": diagnostics,
-            }
+            return {"ok": True, "action": "host_recovered_diagnostics_only", "mission_id": mission_id, "root_mission_id": root_mission_id, "host_recovery": host_recovery, "diagnostics": diagnostics}
         if depth >= depth_limit:
-            return {
-                "ok": True,
-                "action": "terminal_blocker",
-                "mission_id": mission_id,
-                "root_mission_id": root_mission_id,
-                "state": state,
-                "reason": "autonomous_recovery_chain_exhausted",
-                "recovery_depth": depth,
-                "recovery_depth_limit": depth_limit,
-                "host_recovery": host_recovery,
-                "diagnostics": diagnostics,
-            }
+            return {"ok": True, "action": "terminal_blocker", "mission_id": mission_id, "root_mission_id": root_mission_id, "state": state, "reason": "autonomous_recovery_chain_exhausted", "recovery_depth": depth, "recovery_depth_limit": depth_limit, "host_recovery": host_recovery, "diagnostics": diagnostics}
         resumed = mitigate_submit_mission(
-            _with_recovery_marker(
-                objective,
-                root=root_mission_id,
-                depth=depth + 1,
-            ),
+            _with_recovery_marker(objective, root=root_mission_id, depth=depth + 1),
             task_type=task_type,
         )
-        return {
-            "ok": True,
-            "action": "host_recovered_mission_resubmitted",
-            "failed_mission_id": mission_id,
-            "root_mission_id": root_mission_id,
-            "recovery_depth": depth + 1,
-            "recovery_depth_limit": depth_limit,
-            "host_recovery": host_recovery,
-            "resubmitted": resumed,
-            "diagnostics": diagnostics,
-        }
+        return {"ok": True, "action": "host_recovered_mission_resubmitted", "failed_mission_id": mission_id, "root_mission_id": root_mission_id, "recovery_depth": depth + 1, "recovery_depth_limit": depth_limit, "host_recovery": host_recovery, "resubmitted": resumed, "diagnostics": diagnostics}
 
     protected_markers = (
-        "quota_exhausted",
-        "insufficient_quota",
-        "credentials_unavailable",
-        "approval",
-        "permission",
-        "runtime_changed_paths_outside_authorized_scope",
+        "quota_exhausted", "insufficient_quota", "credentials_unavailable",
+        "approval", "permission", "runtime_changed_paths_outside_authorized_scope",
     )
     if any(marker in reason for marker in protected_markers):
-        return {
-            "ok": True,
-            "action": "external_or_policy_action_required",
-            "mission_id": mission_id,
-            "root_mission_id": root_mission_id,
-            "state": state,
-            "reason": reason[:1000],
-            "diagnostics": diagnostics,
-        }
+        return {"ok": True, "action": "external_or_policy_action_required", "mission_id": mission_id, "root_mission_id": root_mission_id, "state": state, "reason": reason[:1000], "diagnostics": diagnostics}
 
     if not objective:
-        return {
-            "ok": True,
-            "action": "diagnostics_only",
-            "mission_id": mission_id,
-            "root_mission_id": root_mission_id,
-            "state": state,
-            "diagnostics": diagnostics,
-        }
+        return {"ok": True, "action": "diagnostics_only", "mission_id": mission_id, "root_mission_id": root_mission_id, "state": state, "diagnostics": diagnostics}
 
     if depth >= depth_limit:
-        return {
-            "ok": True,
-            "action": "terminal_blocker",
-            "mission_id": mission_id,
-            "root_mission_id": root_mission_id,
-            "state": state,
-            "reason": "autonomous_recovery_chain_exhausted",
-            "recovery_depth": depth,
-            "recovery_depth_limit": depth_limit,
-            "diagnostics": diagnostics,
-        }
+        return {"ok": True, "action": "terminal_blocker", "mission_id": mission_id, "root_mission_id": root_mission_id, "state": state, "reason": "autonomous_recovery_chain_exhausted", "recovery_depth": depth, "recovery_depth_limit": depth_limit, "diagnostics": diagnostics}
 
     repair_message = (
         "Autonomously diagnose and resolve the governed MITIGATE failure for "
@@ -254,24 +191,10 @@ def mitigate_autonomous_recovery(mission_id: str) -> dict[str, Any]:
         "Fix the underlying implementation or runtime integration issue when safe, "
         "add regression coverage, validate the result, then complete the original "
         "objective. Original objective:\n\n"
-        + _with_recovery_marker(
-            objective,
-            root=root_mission_id,
-            depth=depth + 1,
-        )
+        + _with_recovery_marker(objective, root=root_mission_id, depth=depth + 1)
     )
     submitted = mitigate_submit_mission(repair_message, task_type=task_type)
-    return {
-        "ok": True,
-        "action": "repair_mission_submitted",
-        "failed_mission_id": mission_id,
-        "root_mission_id": root_mission_id,
-        "failed_state": state,
-        "recovery_depth": depth + 1,
-        "recovery_depth_limit": depth_limit,
-        "repair": submitted,
-        "diagnostics": diagnostics,
-    }
+    return {"ok": True, "action": "repair_mission_submitted", "failed_mission_id": mission_id, "root_mission_id": root_mission_id, "failed_state": state, "recovery_depth": depth + 1, "recovery_depth_limit": depth_limit, "repair": submitted, "diagnostics": diagnostics}
 
 
 if __name__ == "__main__":
