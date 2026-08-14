@@ -36,6 +36,17 @@ Primary for:
 
 OpenClaw must inspect the existing site UI first and reuse its established design language. A reference site is inspiration only: do not copy proprietary source code, branding or protected assets.
 
+## OpenClaw stable compatibility execution
+
+MITIGATE supports two governed OpenClaw coding entry points behind the same adapter contract:
+
+1. Native `openclaw agent exec` when the installed OpenClaw release exposes `--message-file`, `--cwd` and `--json`.
+2. Stable compatibility mode for releases such as `v2026.7.1-2`, whose documented CLI exposes `openclaw agent --local` but not yet `agent exec`. The repository-owned compatibility wrapper translates only the narrow MITIGATE `agent exec` invocation into `agent --local`, supplies a unique mission session key, and sets the documented `OPENCLAW_WORKSPACE_DIR` override to the MITIGATE disposable workspace.
+
+The wrapper validates that the requested workspace resolves below `MITIGATE_WORKSPACE_ROOT` before launching OpenClaw. Unknown compatibility arguments fail closed. If neither native `agent exec` nor the required stable `agent --local` flags are present, OpenClaw coding remains disabled and the router reports the provider unavailable rather than silently weakening isolation.
+
+This compatibility bridge exists because the latest stable OpenClaw release may lag the current upstream `main` CLI. It must be removed naturally in favor of native `agent exec` once a stable installed release provides that command; the activation probe chooses native execution automatically when available.
+
 ## Host/domain portability
 
 Never hard-code the current public IP into WordPress page content, application routes or internal links. Use relative paths or the WordPress/site canonical URL. A page requested today as:

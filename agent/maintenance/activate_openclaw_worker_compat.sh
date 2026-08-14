@@ -17,11 +17,25 @@ install -d -m 0755 /usr/local/libexec
 install -m 0755 "$WRAPPER_SRC" "$WRAPPER_DST"
 install -d -m 0755 "$DROPIN_DIR"
 
-HELP="$($REAL_BINARY agent exec --help 2>&1 || true)"
-if [[ "$HELP" != *"--message-file"* || "$HELP" != *"--cwd"* ]]; then
+EXEC_HELP="$($REAL_BINARY agent exec --help 2>&1 || true)"
+AGENT_HELP="$($REAL_BINARY agent --help 2>&1 || true)"
+
+NATIVE_EXEC=no
+LOCAL_COMPAT=no
+EXEC_MODE=""
+
+if [[ "$EXEC_HELP" == *"--message-file"* && "$EXEC_HELP" == *"--cwd"* && "$EXEC_HELP" == *"--json"* ]]; then
+  NATIVE_EXEC=yes
+  EXEC_MODE="agent-exec"
+elif [[ "$AGENT_HELP" == *"--message-file"* && "$AGENT_HELP" == *"--local"* && "$AGENT_HELP" == *"--session-key"* && "$AGENT_HELP" == *"--json"* ]]; then
+  LOCAL_COMPAT=yes
+  EXEC_MODE="agent-local-compat"
+fi
+
+if [[ -z "$EXEC_MODE" ]]; then
   # Keep the adapter pointed at a fail-closed wrapper so the Router does not
-  # mistake a legacy OpenClaw --version response for coding capability. Restore
-  # the Worker security baseline and do not launch Node from this Worker.
+  # mistake a plain --version response for coding capability. Restore the
+  # Worker security baseline and do not launch Node from this Worker.
   cat >"$DROPIN_FILE" <<EOF
 [Service]
 MemoryDenyWriteExecute=true
@@ -29,6 +43,7 @@ Environment="NODE_OPTIONS="
 Environment="MITIGATE_OPENCLAW_BINARY=$WRAPPER_DST"
 Environment="MITIGATE_OPENCLAW_REAL_BINARY=$REAL_BINARY"
 Environment="MITIGATE_OPENCLAW_CODING_DISABLED=1"
+Environment="MITIGATE_OPENCLAW_EXEC_MODE=disabled"
 Environment="MITIGATE_WORKSPACE_ROOT=/srv/mitigate/data/runtime/workspaces"
 EOF
   systemctl daemon-reload
@@ -36,6 +51,7 @@ EOF
   sleep 2
   test "$(systemctl is-active mitigate-ai-worker.service)" = "active"
   echo "OPENCLAW_AGENT_EXEC_SUPPORTED=no"
+  echo "OPENCLAW_AGENT_LOCAL_COMPAT_SUPPORTED=no"
   echo "OPENCLAW_CODING_FALLBACK=DISABLED_UNTIL_COMPATIBLE_VERSION"
   echo "WORKER_MEMORY_DENY_WRITE_EXECUTE=$(systemctl show mitigate-ai-worker.service -p MemoryDenyWriteExecute --value)"
   echo "WORKER_OPENCLAW_BINARY=$(systemctl show mitigate-ai-worker.service -p Environment --value | tr ' ' '\n' | grep '^MITIGATE_OPENCLAW_BINARY=' | tail -1)"
@@ -49,6 +65,7 @@ Environment="NODE_OPTIONS="
 Environment="MITIGATE_OPENCLAW_BINARY=$WRAPPER_DST"
 Environment="MITIGATE_OPENCLAW_REAL_BINARY=$REAL_BINARY"
 Environment="MITIGATE_OPENCLAW_CODING_DISABLED=0"
+Environment="MITIGATE_OPENCLAW_EXEC_MODE=$EXEC_MODE"
 Environment="MITIGATE_WORKSPACE_ROOT=/srv/mitigate/data/runtime/workspaces"
 EOF
 
@@ -58,7 +75,9 @@ sleep 2
 
 test "$(systemctl is-active mitigate-ai-worker.service)" = "active"
 
-echo "OPENCLAW_AGENT_EXEC_SUPPORTED=yes"
+echo "OPENCLAW_AGENT_EXEC_SUPPORTED=$NATIVE_EXEC"
+echo "OPENCLAW_AGENT_LOCAL_COMPAT_SUPPORTED=$LOCAL_COMPAT"
+echo "OPENCLAW_EXEC_MODE=$EXEC_MODE"
 echo "OPENCLAW_WORKER_COMPAT=ACTIVE"
 echo "OPENCLAW_WRAPPER=$WRAPPER_DST"
 echo "WORKER_MEMORY_DENY_WRITE_EXECUTE=$(systemctl show mitigate-ai-worker.service -p MemoryDenyWriteExecute --value)"
