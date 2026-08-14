@@ -15,13 +15,22 @@ DROPIN_FILE="$DROPIN_DIR/20-openclaw-node-compat.conf"
 
 install -d -m 0755 /usr/local/libexec
 install -m 0755 "$WRAPPER_SRC" "$WRAPPER_DST"
+install -d -m 0755 "$DROPIN_DIR"
 
 HELP="$($REAL_BINARY agent exec --help 2>&1 || true)"
 if [[ "$HELP" != *"--message-file"* || "$HELP" != *"--cwd"* ]]; then
-  # Installed OpenClaw does not implement the governed coding contract. Remove
-  # the temporary Node compatibility override and restore the Worker security
-  # baseline. OpenHands remains the primary coding provider.
-  rm -f "$DROPIN_FILE"
+  # Keep the adapter pointed at a fail-closed wrapper so the Router does not
+  # mistake a legacy OpenClaw --version response for coding capability. Restore
+  # the Worker security baseline and do not launch Node from this Worker.
+  cat >"$DROPIN_FILE" <<EOF
+[Service]
+MemoryDenyWriteExecute=true
+Environment="NODE_OPTIONS="
+Environment="MITIGATE_OPENCLAW_BINARY=$WRAPPER_DST"
+Environment="MITIGATE_OPENCLAW_REAL_BINARY=$REAL_BINARY"
+Environment="MITIGATE_OPENCLAW_CODING_DISABLED=1"
+Environment="MITIGATE_WORKSPACE_ROOT=/srv/mitigate/data/runtime/workspaces"
+EOF
   systemctl daemon-reload
   systemctl restart mitigate-ai-worker.service
   sleep 2
@@ -29,16 +38,17 @@ if [[ "$HELP" != *"--message-file"* || "$HELP" != *"--cwd"* ]]; then
   echo "OPENCLAW_AGENT_EXEC_SUPPORTED=no"
   echo "OPENCLAW_CODING_FALLBACK=DISABLED_UNTIL_COMPATIBLE_VERSION"
   echo "WORKER_MEMORY_DENY_WRITE_EXECUTE=$(systemctl show mitigate-ai-worker.service -p MemoryDenyWriteExecute --value)"
+  echo "WORKER_OPENCLAW_BINARY=$(systemctl show mitigate-ai-worker.service -p Environment --value | tr ' ' '\n' | grep '^MITIGATE_OPENCLAW_BINARY=' | tail -1)"
   exit 0
 fi
 
-install -d -m 0755 "$DROPIN_DIR"
 cat >"$DROPIN_FILE" <<EOF
 [Service]
 MemoryDenyWriteExecute=false
 Environment="NODE_OPTIONS="
 Environment="MITIGATE_OPENCLAW_BINARY=$WRAPPER_DST"
 Environment="MITIGATE_OPENCLAW_REAL_BINARY=$REAL_BINARY"
+Environment="MITIGATE_OPENCLAW_CODING_DISABLED=0"
 Environment="MITIGATE_WORKSPACE_ROOT=/srv/mitigate/data/runtime/workspaces"
 EOF
 
