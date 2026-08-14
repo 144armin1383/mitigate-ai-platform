@@ -156,6 +156,13 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             "provider_metadata": dict(evidence.provider_metadata or {}),
         }
 
+    @staticmethod
+    def _should_fallback_from_openhands(result: Any) -> bool:
+        """Compatibility wrapper; RuntimeRouter is the sole failover authority."""
+        if str(getattr(result, "provider", "")).lower() != "openhands":
+            return False
+        return RuntimeRouter._can_failover(result)
+
     def execute(self, mission: dict[str, Any]) -> dict[str, Any]:
         try:
             mission_name = self._mission_name(mission)
@@ -215,9 +222,6 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             isolated_workspace=True,
         )
 
-        # RuntimeRouter owns provider ordering, health checks, per-provider
-        # disposable workspaces and bounded failover. Mission controllers never
-        # resubmit directly to a provider or duplicate provider-selection logic.
         result = self.router.execute(
             request,
             require=requirements,
