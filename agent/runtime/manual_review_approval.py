@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import re
@@ -14,11 +15,17 @@ _MANUAL_REVIEW_REASON = "manual_review_required"
 
 
 class ManualReviewApprovalService:
-    """Human-triggered, fail-closed approval and fast-forward merge service.
+    """Human-triggered, fail-closed manual-review decision service.
 
-    The caller supplies an already-authenticated human identity. This service
-    never accepts arbitrary Git refs or commands from the client: the mission
-    identifier determines the only eligible mission branch.
+    The caller supplies an already-authenticated human identity. The browser
+    never supplies Git refs or shell commands. Approval resolves the governed
+    mission branch and may fast-forward it into ``main``. Rejection performs no
+    Git mutation and removes the mission from active work by transitioning the
+    durable queue record to ``cancelled``.
+
+    Every decision is persisted both as a per-mission JSON record and in an
+    append-only JSONL history so future agents can reconstruct recent human
+    decisions when diagnosing regressions or unexpected behavior.
     """
 
     def __init__(
@@ -58,7 +65,7 @@ class ManualReviewApprovalService:
             raise RuntimeError("approval_git_operation_failed")
         return result
 
-    def _failure_reason(self, mission_id: str) -> str:
+    def _failure_evidence(self, mission_id: str) -> dict[str, Any]:
         path = (
             self.data_root
             / "runtime"
@@ -71,7 +78,12 @@ class ManualReviewApprovalService:
             raise RuntimeError("approval_evidence_unavailable") from exc
         if not isinstance(payload, dict):
             raise RuntimeError("approval_evidence_unavailable")
-        return str(payload.get("reason") or "").strip().lower()
+        return payload
+
+    def _failure_reason(self, mission_id: str) -> str:
+        return str(
+            self._failure_evidence(mission_id).get("reason") or ""
+        ).strip().lower()
 
     def _mission_ref(self, mission_id: str) -> tuple[str, str]:
         patterns = (
@@ -106,31 +118,59 @@ class ManualReviewApprovalService:
         )
         return preferred, sha
 
-    def _write_approval_record(
+    def _changed_files(self, branch: str) -> list[str]:
+        return [
+            line.strip()
+            for line in self._git(
+                "diff",
+                "--name-only",
+                f"main...{branch}",
+            ).stdout.splitlines()
+            if line.strip()
+        ]
+
+    def _decision_directory(self) -> Path:
+        directory = self.data_root / "runtime" / "approvals"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def _write_decision_record(
         self,
         *,
         mission_id: str,
-        approved_by: str,
-        branch: str,
-        commit: str,
+        decided_by: str,
+        decision: str,
+        request_id: str,
+        branch: str | None,
+        commit: str | None,
         before: str,
+        after: str,
         changed_files: list[str],
         already_merged: bool,
+        result_state: str,
     ) -> Path:
-        directory = self.data_root / "runtime" / "approvals"
-        directory.mkdir(parents=True, exist_ok=True)
+        directory = self._decision_directory()
         path = directory / f"{mission_id}.json"
+        timestamp = dt.datetime.now(dt.timezone.utc).replace(
+            microsecond=0
+        ).isoformat().replace("+00:00", "Z")
         payload = {
+            "schema_version": 1,
+            "record_type": "manual_review_decision",
             "mission_id": mission_id,
-            "action": "approved_and_merged",
-            "approved_by": approved_by,
+            "request_id": request_id,
+            "decision": decision,
+            "decided_by": decided_by,
+            "decided_at": timestamp,
             "branch": branch,
             "commit": commit,
             "main_before": before,
-            "main_after": commit,
+            "main_after": after,
             "changed_files": changed_files,
             "already_merged": bool(already_merged),
+            "result_state": result_state,
         }
+
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{mission_id}.",
             suffix=".tmp",
@@ -149,17 +189,52 @@ class ManualReviewApprovalService:
             except OSError:
                 pass
             raise
+
+        history = directory / "decision-history.jsonl"
+        line = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+        history_fd = os.open(
+            history,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o600,
+        )
+        try:
+            os.write(history_fd, line.encode("utf-8"))
+            os.fsync(history_fd)
+        finally:
+            os.close(history_fd)
+
         return path
 
-    def approve(self, mission_id: str, *, approved_by: str) -> dict[str, Any]:
+    def _validate_manual_review(
+        self,
+        mission_id: str,
+        actor: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         mission_id = str(mission_id or "").strip()
-        approved_by = str(approved_by or "").strip()
+        actor = str(actor or "").strip()
         if not _SAFE_MISSION_ID.fullmatch(mission_id):
             raise ValueError("invalid_mission_id")
-        if not approved_by or len(approved_by) > 160:
+        if not actor or len(actor) > 160:
             raise ValueError("invalid_approver")
 
         mission = self.queue.get(mission_id)
+        evidence = self._failure_evidence(mission_id)
+        state = str(mission.get("state") or "").lower()
+        if state not in {"blocked", "completed", "cancelled"}:
+            raise RuntimeError("approval_requires_manual_review")
+        if (
+            state == "blocked"
+            and str(evidence.get("reason") or "").strip().lower()
+            != _MANUAL_REVIEW_REASON
+        ):
+            raise RuntimeError("approval_requires_manual_review")
+        return mission, evidence
+
+    def approve(self, mission_id: str, *, approved_by: str) -> dict[str, Any]:
+        mission, evidence = self._validate_manual_review(
+            mission_id,
+            approved_by,
+        )
         state = str(mission.get("state") or "").lower()
         if state == "completed":
             return {
@@ -168,10 +243,8 @@ class ManualReviewApprovalService:
                 "state": "completed",
                 "idempotent": True,
             }
-        if state != "blocked":
-            raise RuntimeError("approval_requires_manual_review")
-        if self._failure_reason(mission_id) != _MANUAL_REVIEW_REASON:
-            raise RuntimeError("approval_requires_manual_review")
+        if state == "cancelled":
+            raise RuntimeError("approval_mission_was_rejected")
 
         if self._git("branch", "--show-current").stdout.strip() != "main":
             raise RuntimeError("approval_canonical_not_on_main")
@@ -189,20 +262,8 @@ class ManualReviewApprovalService:
         if diff_check.returncode != 0 or diff_check.stdout.strip() or diff_check.stderr.strip():
             raise RuntimeError("approval_diff_check_failed")
 
-        changed_files = [
-            line.strip()
-            for line in self._git(
-                "diff",
-                "--name-only",
-                f"main...{branch}",
-            ).stdout.splitlines()
-            if line.strip()
-        ]
-        forbidden = (
-            ".git",
-            ".env",
-            "secrets",
-        )
+        changed_files = self._changed_files(branch)
+        forbidden = (".git", ".env", "secrets")
         for path in changed_files:
             lowered = path.lower()
             if any(
@@ -250,14 +311,19 @@ class ManualReviewApprovalService:
             if local_after != commit or remote_after != commit:
                 raise RuntimeError("approval_remote_verification_failed")
 
-        record = self._write_approval_record(
+        after = self._git("rev-parse", "HEAD").stdout.strip()
+        record = self._write_decision_record(
             mission_id=mission_id,
-            approved_by=approved_by,
+            decided_by=approved_by,
+            decision="approved",
+            request_id=str(evidence.get("request_id") or ""),
             branch=branch,
             commit=commit,
             before=before,
+            after=after,
             changed_files=changed_files,
             already_merged=already_merged,
+            result_state="completed",
         )
         self.queue.approve_manual_review(mission_id)
 
@@ -270,4 +336,65 @@ class ManualReviewApprovalService:
             "changed_files": changed_files,
             "already_merged": already_merged,
             "approval_record": str(record),
+        }
+
+    def reject(self, mission_id: str, *, rejected_by: str) -> dict[str, Any]:
+        mission, evidence = self._validate_manual_review(
+            mission_id,
+            rejected_by,
+        )
+        state = str(mission.get("state") or "").lower()
+        if state == "cancelled":
+            return {
+                "rejected": True,
+                "mission_id": mission_id,
+                "state": "cancelled",
+                "idempotent": True,
+            }
+        if state == "completed":
+            raise RuntimeError("rejection_mission_already_completed")
+
+        if self._git("branch", "--show-current").stdout.strip() != "main":
+            raise RuntimeError("approval_canonical_not_on_main")
+        if self._git("status", "--porcelain").stdout.strip():
+            raise RuntimeError("approval_canonical_not_clean")
+
+        before = self._git("rev-parse", "HEAD").stdout.strip()
+        branch: str | None = None
+        commit: str | None = None
+        changed_files: list[str] = []
+        try:
+            branch, commit = self._mission_ref(mission_id)
+            changed_files = self._changed_files(branch)
+        except RuntimeError:
+            # Rejection must remain possible even if the disposable branch has
+            # already been cleaned up; the durable failure evidence still ties
+            # the decision to the mission and request.
+            branch = None
+            commit = None
+            changed_files = []
+
+        record = self._write_decision_record(
+            mission_id=mission_id,
+            decided_by=rejected_by,
+            decision="rejected",
+            request_id=str(evidence.get("request_id") or ""),
+            branch=branch,
+            commit=commit,
+            before=before,
+            after=before,
+            changed_files=changed_files,
+            already_merged=False,
+            result_state="cancelled",
+        )
+        self.queue.reject_manual_review(mission_id)
+
+        return {
+            "rejected": True,
+            "mission_id": mission_id,
+            "state": "cancelled",
+            "branch": branch,
+            "commit": commit,
+            "changed_files": changed_files,
+            "decision_record": str(record),
         }
