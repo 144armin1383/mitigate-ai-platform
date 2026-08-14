@@ -1,13 +1,79 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import urllib.parse
+from pathlib import Path
+from typing import Any
 
 from agent.web import panel_server as base
 
 
 _SAFE_MISSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$")
+_MANUAL_REVIEW_REASON = "manual_review_required"
+
+
+def _data_root() -> Path:
+    return Path(
+        os.environ.get("MITIGATE_AI_DATA_ROOT", "/srv/mitigate/data")
+    ).expanduser().resolve()
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _approval_queue_items() -> list[dict[str, Any]]:
+    """Return only durable manual-review gates without scanning request history.
+
+    The Canvas approval control used to poll the general /v1/requests endpoint.
+    That endpoint reconstructs historical request state and can outlive the UI
+    polling timeout. Approval state is much smaller and is already durable in
+    missions.json plus per-mission failure evidence, so expose it directly.
+    """
+    root = _data_root() / "runtime"
+    queue = _load_json(root / "missions.json")
+    missions = queue.get("missions")
+    if not isinstance(missions, list):
+        return []
+
+    items: list[dict[str, Any]] = []
+    for mission in missions:
+        if not isinstance(mission, dict):
+            continue
+        mission_id = str(mission.get("id") or "").strip()
+        if (
+            not _SAFE_MISSION_ID.fullmatch(mission_id)
+            or str(mission.get("state") or "").strip().lower() != "blocked"
+        ):
+            continue
+
+        evidence = _load_json(
+            root / "failure-evidence" / f"{mission_id}.json"
+        )
+        reason = str(evidence.get("reason") or "").strip().lower()
+        if reason != _MANUAL_REVIEW_REASON:
+            continue
+
+        items.append(
+            {
+                "request_id": str(evidence.get("request_id") or "").strip(),
+                "mission_id": mission_id,
+                "status": "awaiting_approval",
+                "reason": _MANUAL_REVIEW_REASON,
+                "created_seq": int(mission.get("created_seq") or 0),
+                "attempts_done": int(mission.get("attempts_done") or 0),
+            }
+        )
+
+    items.sort(key=lambda item: item["created_seq"], reverse=True)
+    return items
 
 
 class ApprovalPanelServer(base.PanelServer):
@@ -18,6 +84,26 @@ class ApprovalPanelServer(base.PanelServer):
         outer = self
 
         class Handler(parent):
+            def do_GET(self) -> None:
+                parsed = urllib.parse.urlsplit(self.path)
+                if parsed.path == "/api/approvals":
+                    if not self._require_auth():
+                        return
+                    items = _approval_queue_items()
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "status": 200,
+                            "data": {
+                                "items": items,
+                                "count": len(items),
+                            },
+                        },
+                    )
+                    return
+                super().do_GET()
+
             def do_POST(self) -> None:
                 parsed = urllib.parse.urlsplit(self.path)
                 parts = [
