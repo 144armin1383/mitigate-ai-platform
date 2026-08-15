@@ -19,6 +19,7 @@ from agent.execution.runtime_branch_publisher import RuntimeBranchPublisher
 from agent.execution.runtime_router import RuntimeRouter
 from agent.execution.workspace_manager import DisposableWorkspaceManager
 from agent.runtime.production_mission_controller import ProductionMissionController
+from agent.runtime.project_scope_resolver import ProjectScopeResolver
 
 
 class _MissionCompatibleRuntimePublisher(RuntimeBranchPublisher):
@@ -154,18 +155,14 @@ class WorkspaceProductionMissionController(ProductionMissionController):
 
     @staticmethod
     def _default_allowed_paths(task_type: str, objective: str) -> tuple[str, ...]:
-        if task_type == "documentation" or any(
-            marker in objective.lower()
-            for marker in ("architecture assessment", "build-vs-adopt assessment", "assessment document")
-        ):
-            return ("docs", "README.md")
-        if task_type == "github":
-            return (".github", "agent", "docs")
-        if task_type in {"infrastructure", "deployment"}:
-            return ("agent", ".github", "docs")
-        if task_type in {"frontend", "wordpress", "content"}:
-            return ("wordpress", "docs")
-        return ("agent",)
+        """Backward-compatible helper retained for older callers/tests."""
+        decision = ProjectScopeResolver.derive(
+            task_type=task_type,
+            objective=objective,
+            context={},
+            deliverables=(),
+        )
+        return decision.allowed_paths
 
     @staticmethod
     def _allows_no_changes(task_type: str) -> bool:
@@ -210,15 +207,14 @@ class WorkspaceProductionMissionController(ProductionMissionController):
         ) if isinstance(deliverables_raw, list) else ()
 
         task_type = str(metadata.get("task_type") or "backend").lower()
-        software_task = task_type in {
-            "backend", "frontend", "api", "testing", "documentation",
-            "infrastructure", "security", "database", "fullstack",
-            "bugfix", "maintenance", "refactor", "test", "tests", "github",
-            "deployment", "wordpress", "content", "seo", "inspection",
-        }
-        allowed_paths = deliverables
-        if software_task and not allowed_paths:
-            allowed_paths = self._default_allowed_paths(task_type, objective)
+        scope = ProjectScopeResolver.derive(
+            task_type=task_type,
+            objective=objective,
+            context=context,
+            deliverables=deliverables,
+        )
+        allowed_paths = scope.allowed_paths
+        denied_paths = scope.denied_paths
 
         routing = decide_provider(task_type, objective)
         provider_guidance = provider_contract(routing.preferred[0])
@@ -233,17 +229,23 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             repository_root=str(self.repository_root),
             base_revision="main",
             allowed_paths=allowed_paths,
-            denied_paths=(".git", ".env", "secrets"),
+            denied_paths=denied_paths,
             acceptance_criteria=(
                 "Inspect the existing repository before modifying files.",
                 "Implement the smallest architecture-consistent fix.",
                 "Run relevant automated tests and validation.",
+                "Stay within the MITIGATE-derived repository scope.",
                 "Do not commit, push or merge from the external runtime.",
                 *provider_guidance,
             ),
             timeout_seconds=self.timeout_seconds,
             metadata={
                 "task_type": task_type,
+                "project_id": str(context.get("project_id") or ""),
+                "project_type": str(context.get("project_type") or ""),
+                "scope_project_kind": scope.project_kind,
+                "scope_rationale": list(scope.rationale),
+                "scope_allowed_paths": list(scope.allowed_paths),
                 "model": os.environ.get("MITIGATE_OPENHANDS_MODEL", "gpt-5.5"),
                 "routing_rationale": routing.rationale,
                 "forced_provider": routing.forced_provider,
@@ -260,6 +262,12 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             "preferred": list(routing.preferred),
             "forced_provider": routing.forced_provider,
             "rationale": routing.rationale,
+        }
+        runtime_evidence["scope"] = {
+            "project_kind": scope.project_kind,
+            "allowed_paths": list(scope.allowed_paths),
+            "denied_paths": list(scope.denied_paths),
+            "rationale": list(scope.rationale),
         }
 
         if result.status == RuntimeStatus.succeeded:
