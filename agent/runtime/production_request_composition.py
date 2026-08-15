@@ -22,8 +22,8 @@ from agent.orchestrator.unified_request_flow_service import (
 from agent.runtime.production_planner_contract_adapter import (
     ProductionPlannerContractAdapter,
 )
-from agent.runtime.production_request_queue_adapter import (
-    ProductionRequestQueueAdapter,
+from agent.runtime.isolated_request_queue_adapter import (
+    IsolatedProductionRequestQueueAdapter,
 )
 
 
@@ -143,7 +143,7 @@ class ProductionRequestComposition:
     planner_queue_flow: PlannerQueueFlowCoordinator
     queue_coordinator: QueueEnqueueCoordinator
     planner: ProductionPlannerContractAdapter
-    queue_adapter: ProductionRequestQueueAdapter
+    queue_adapter: IsolatedProductionRequestQueueAdapter
     event_sink: Any
 
 
@@ -184,7 +184,7 @@ def build_production_request_composition(
     )
 
     queue_adapter = (
-        ProductionRequestQueueAdapter(
+        IsolatedProductionRequestQueueAdapter(
             project_id=project_id,
             queue_path=queue_path,
             repository_root=repository_root,

@@ -261,14 +261,24 @@ class ProductionRuntimeAPITests(
             )
 
             definition_path = (
+                queue_path.parent
+                / "mission-definitions"
+                / f"{mission_id}.md"
+            )
+
+            self.assertTrue(
+                definition_path.exists()
+            )
+
+            legacy_definition_path = (
                 root
                 / "agent"
                 / "missions"
                 / f"{mission_id}.md"
             )
 
-            self.assertTrue(
-                definition_path.exists()
+            self.assertFalse(
+                legacy_definition_path.exists()
             )
 
     def test_status_alias_matches_runtime_status(self):
@@ -726,6 +736,45 @@ class ProductionRuntimeStatusContractTests(
         ):
             runtime.get_request_status(
                 "missing-request"
+            )
+
+    def test_production_composition_uses_isolated_mission_definitions(self):
+        from agent.runtime.isolated_request_queue_adapter import (
+            IsolatedProductionRequestQueueAdapter,
+        )
+        from agent.runtime.production_request_composition import (
+            build_production_request_composition,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "repo"
+            repository.mkdir()
+            queue_path = root / "runtime" / "missions.json"
+            queue_path.parent.mkdir(parents=True)
+
+            composition = build_production_request_composition(
+                project_id="mitigate-ai-platform",
+                queue_reference="production",
+                queue_path=queue_path,
+                repository_root=repository,
+                project_registry=object(),
+                provider_registry=object(),
+                budget_evaluator=object(),
+                rate_limiter=object(),
+            )
+
+            self.assertIsInstance(
+                composition.queue_adapter,
+                IsolatedProductionRequestQueueAdapter,
+            )
+            self.assertEqual(
+                composition.queue_adapter.missions_root,
+                queue_path.parent / "mission-definitions",
+            )
+            self.assertNotEqual(
+                composition.queue_adapter.missions_root,
+                repository / "agent" / "missions",
             )
 
 
