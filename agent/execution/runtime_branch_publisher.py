@@ -120,37 +120,19 @@ class RuntimeBranchPublisher:
             authorized = runtime_changed
             ignored = ()
 
-        # Scope expansion is never silently accepted or partially published.
-        # Return the exact missing path delta so Core can request only the
-        # exceptional authorization rather than forcing the user to diagnose
-        # an opaque generic block.
-        if ignored:
-            diagnostics = tuple(result.evidence.diagnostics) + tuple(
-                f"scope_violation:{path}" for path in ignored[:50]
-            )
-            evidence = replace(
-                result.evidence,
-                diagnostics=diagnostics,
-                provider_metadata={
-                    **dict(result.evidence.provider_metadata or {}),
-                    "missing_scope_paths": list(ignored[:200]),
-                    "authorized_scope_paths": list(request.allowed_paths[:200]),
-                },
-            )
-            return replace(
-                result,
-                status=RuntimeStatus.blocked,
-                retryable=False,
-                reason="runtime_changed_paths_outside_authorized_scope",
-                evidence=evidence,
-            )
-
         if not authorized:
             evidence = replace(
                 result.evidence,
                 changed_files=(),
                 diagnostics=tuple(result.evidence.diagnostics)
-                + ("runtime_changes_outside_authorized_scope",),
+                + (
+                    "runtime_changes_outside_authorized_scope:"
+                    + ",".join(ignored[:20]),
+                ),
+                provider_metadata={
+                    **dict(result.evidence.provider_metadata or {}),
+                    "ignored_out_of_scope_files": list(ignored[:200]),
+                },
             )
             return replace(result, evidence=evidence)
 
@@ -173,6 +155,15 @@ class RuntimeBranchPublisher:
 
         self._git(path, "push", "-u", self.remote, branch)
 
+        diagnostics = tuple(result.evidence.diagnostics)
+        metadata = dict(result.evidence.provider_metadata or {})
+        if ignored:
+            diagnostics += (
+                "runtime_out_of_scope_changes_discarded:"
+                + ",".join(ignored[:20]),
+            )
+            metadata["ignored_out_of_scope_files"] = list(ignored[:200])
+
         return replace(
             result,
             evidence=replace(
@@ -180,6 +171,8 @@ class RuntimeBranchPublisher:
                 changed_files=staged_paths,
                 branch=branch,
                 commit_sha=commit,
+                diagnostics=diagnostics,
+                provider_metadata=metadata,
             ),
         )
 
