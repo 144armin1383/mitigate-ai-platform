@@ -252,15 +252,15 @@ class RuntimeExecutionObservabilityTests(unittest.TestCase):
         self.assertTrue(
             WorkspaceProductionMissionController._should_fallback_from_openhands(result)
         )
-        unrelated = ExecutionResult(
+        quota = ExecutionResult(
             status=RuntimeStatus.failed,
             provider="openhands",
             retryable=False,
             reason="openhands_llm_quota_exhausted",
             evidence=ExecutionEvidence(),
         )
-        self.assertFalse(
-            WorkspaceProductionMissionController._should_fallback_from_openhands(unrelated)
+        self.assertTrue(
+            WorkspaceProductionMissionController._should_fallback_from_openhands(quota)
         )
 
     def test_failure_evidence_is_persisted_before_retry(self) -> None:
