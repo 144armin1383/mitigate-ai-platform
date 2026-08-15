@@ -53,11 +53,15 @@ class CanvasApprovalIntegrationTests(unittest.TestCase):
         )
         self.assertIn("https://opencode.ai/zen/v1", text)
         self.assertIn("openai/glm-5.2", text)
+        self.assertIn("opencode/${id}", text)
         self.assertIn("/mitigate-llm/opencode/models", text)
         self.assertIn("/api/profiles/${encodeURIComponent(PROFILE)}", text)
+        self.assertIn("/mitigate-runtime/provider/opencode", text)
+        self.assertIn("runtime_configured", text)
         self.assertIn("base_url: BASE_URL", text)
         self.assertIn("include_secrets: true", text)
         self.assertIn("Save & Activate", text)
+        self.assertIn("Canvas + MITIGATE Runtime", text)
         self.assertIn("Test Connection", text)
         self.assertIn("MINIMIZED_STORAGE_KEY", text)
         self.assertIn("data-minimize", text)
@@ -90,6 +94,9 @@ class CanvasApprovalIntegrationTests(unittest.TestCase):
         self.assertIn("MITIGATE_APPROVAL_OVERLAY=ACTIVE", text)
         self.assertIn("MITIGATE_LLM_PROVIDER_OVERLAY=ACTIVE", text)
         self.assertIn("MITIGATE_OPENCODE_ZEN_PROBE=ACTIVE", text)
+        self.assertIn("MITIGATE_OPENCODE_RUNTIME_SYNC=ACTIVE", text)
+        self.assertIn("/mitigate-runtime/provider/opencode", text)
+        self.assertIn("provider-secrets", text)
         self.assertIn("https://opencode.ai/zen/v1/", text)
         self.assertIn('proxy_set_header Authorization "Bearer \\$http_x_mitigate_llm_key"', text)
         self.assertIn('proxy_set_header X-Mitigate-LLM-Key ""', text)
@@ -111,6 +118,13 @@ class CanvasApprovalIntegrationTests(unittest.TestCase):
         self.assertNotIn("Agent Control Panel", text)
         self.assertIn("standalone_panel_removed", text)
         self.assertIn("Use the MITIGATE controls inside Agent Canvas", text)
+
+    def test_provider_handoff_is_authenticated_and_private(self) -> None:
+        text = (ROOT / "agent/web/panel_server_approval.py").read_text(encoding="utf-8")
+        self.assertIn('/api/providers/opencode', text)
+        self.assertIn('self._require_auth()', text)
+        self.assertIn('save_provider_secret(provider="opencode"', text)
+        self.assertNotIn('print(api_key)', text)
 
 
 if __name__ == "__main__":
