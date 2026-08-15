@@ -46,6 +46,8 @@ class ProjectScopeResolver:
     _PLATFORM_MARKERS = (
         "mitigate core",
         "mitigate runtime",
+        "mitigate's mission scope",
+        "mitigate mission scope",
         "runtime architecture",
         "governance",
         "scope resolution",
@@ -81,6 +83,14 @@ class ProjectScopeResolver:
         project_type = str(context.get("project_type") or "").strip().lower()
         rationale: list[str] = []
 
+        # Explicit platform/self-maintenance intent wins over references to a
+        # managed stack that merely explain the bug being fixed. This avoids a
+        # Core scope-resolution mission being misclassified as WordPress just
+        # because its objective mentions the WordPress request that exposed it.
+        if any(marker in objective_lower for marker in cls._PLATFORM_MARKERS):
+            rationale.append("objective:mitigate-platform")
+            return "mitigate-platform", tuple(rationale)
+
         if project_type in {"wordpress", "woocommerce", "wp"}:
             rationale.append(f"project_type:{project_type}")
             return "wordpress", tuple(rationale)
@@ -88,10 +98,6 @@ class ProjectScopeResolver:
         if any(marker in objective_lower for marker in cls._WORDPRESS_MARKERS):
             rationale.append("objective:wordpress")
             return "wordpress", tuple(rationale)
-
-        if any(marker in objective_lower for marker in cls._PLATFORM_MARKERS):
-            rationale.append("objective:mitigate-platform")
-            return "mitigate-platform", tuple(rationale)
 
         if task_type in {"wordpress", "content", "seo"}:
             rationale.append(f"task_type:{task_type}")
