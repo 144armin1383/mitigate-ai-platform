@@ -46,6 +46,20 @@ class ProjectScopeResolverTests(unittest.TestCase):
         self.assertEqual(("agent", "docs", ".github"), decision.allowed_paths)
         self.assertNotIn("agent", decision.denied_paths)
 
+    def test_platform_intent_wins_when_bug_context_mentions_wordpress(self) -> None:
+        decision = ProjectScopeResolver.derive(
+            task_type="deployment",
+            objective=(
+                "Improve MITIGATE's mission scope resolution because a normal "
+                "WordPress feature request was blocked before execution."
+            ),
+            context={"project_type": "git"},
+        )
+
+        self.assertEqual("mitigate-platform", decision.project_kind)
+        self.assertIn("agent", decision.allowed_paths)
+        self.assertNotIn("agent", decision.denied_paths)
+
     def test_documentation_explicit_deliverable_remains_narrow(self) -> None:
         decision = ProjectScopeResolver.derive(
             task_type="documentation",
