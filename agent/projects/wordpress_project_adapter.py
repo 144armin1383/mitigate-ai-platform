@@ -67,14 +67,6 @@ class WordPressProjectAdapter:
             raise ValueError("unsafe_wordpress_slug")
         return text
 
-    @staticmethod
-    def _safe_repo_path(value: str) -> str:
-        text = str(value or "").strip().replace("\\", "/")
-        path = PurePosixPath(text)
-        if not text or path.is_absolute() or ".." in path.parts:
-            raise ValueError("unsafe_repository_path")
-        return str(path)
-
     def _run_wp(self, *args: str) -> subprocess.CompletedProcess[str]:
         proc = self._runner(
             [self.wp_binary, f"--path={self.wordpress_root}", *args],
@@ -227,9 +219,9 @@ class WordPressProjectAdapter:
                 diagnostics=("project_deploy_not_authorized",),
             )
         repository_root = Path(request.repository_root).expanduser().resolve()
-        manifest = self._manifest(repository_root)
         actions: list[str] = []
         try:
+            manifest = self._manifest(repository_root)
             for kind, package in self._packages(request.changed_files):
                 actions.append(self._atomic_copy_package(
                     repository_root=repository_root,
@@ -283,8 +275,6 @@ class WordPressProjectAdapter:
         )
 
     def rollback(self, request: ProjectDeploymentRequest, revision: str) -> ProjectDeploymentResult:
-        # Rollback is intentionally revision-driven and must be orchestrated by
-        # MITIGATE Git/deployment policy; the adapter never invents a revision.
         return ProjectDeploymentResult(
             success=False,
             adapter=self.name,
