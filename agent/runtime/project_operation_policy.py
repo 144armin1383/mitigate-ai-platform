@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -8,10 +9,10 @@ from typing import Any, Mapping
 class ProjectOperationDecision:
     """Governance decision for project-owned runtime/deployment operations.
 
-    Repository write scope is handled separately by ProjectScopeResolver.  This
-    policy answers a different question: which *project-owned* operations may be
-    planned without stopping the user for path-by-path authorization, and which
-    requests still cross a protected trust boundary.
+    Repository write scope is handled separately by ProjectScopeResolver. This
+    policy answers which project-owned operations may be planned without
+    interrupting the operator for path-by-path authorization, and which requests
+    still cross a protected trust boundary.
     """
 
     project_kind: str
@@ -25,12 +26,12 @@ class ProjectOperationDecision:
 
 
 class ProjectOperationPolicy:
-    """Classify ordinary managed-project operations before execution.
+    """Classify routine managed-project operations before execution.
 
-    The contract is deliberately capability-based rather than command-based.
-    External execution engines never gain arbitrary host access from this
-    policy.  MITIGATE-owned Project Adapters remain responsible for translating
-    an authorized capability into bounded WP-CLI/filesystem/database actions.
+    The policy grants named capabilities, never arbitrary commands. External
+    execution engines still receive only disposable repository workspaces.
+    MITIGATE-owned Project Adapters are responsible for translating a routine
+    capability into bounded host, WP-CLI, filesystem or database operations.
     """
 
     WORDPRESS_ROUTINE = (
@@ -51,27 +52,40 @@ class ProjectOperationPolicy:
         "project.healthcheck",
     )
 
-    _PROTECTED_MARKERS: tuple[tuple[str, str], ...] = (
-        ("nginx", "host.nginx_global"),
-        ("systemd", "host.systemd_global"),
-        ("firewall", "host.firewall"),
-        ("ufw", "host.firewall"),
-        ("sudoers", "host.privilege"),
-        ("privilege escalation", "host.privilege"),
-        ("root password", "host.secrets"),
-        ("api key", "host.secrets"),
-        ("secret", "host.secrets"),
-        ("wp-config.php", "wordpress.core_config"),
-        ("wordpress core", "wordpress.core"),
-        ("wp-admin", "wordpress.core"),
-        ("wp-includes", "wordpress.core"),
-        ("parent theme", "wordpress.parent_theme"),
-        ("drop database", "database.destructive"),
-        ("drop table", "database.destructive"),
-        ("truncate table", "database.destructive"),
-        ("delete all", "database.destructive"),
-        ("mitigate governance", "mitigate.trust_boundary"),
-        ("security policy", "mitigate.trust_boundary"),
+    # A protected term appearing in a prohibition (for example "do not modify
+    # Nginx") must not itself block an otherwise routine mission. We therefore
+    # detect requested protected *actions*, not mere noun mentions.
+    _PROTECTED_ACTIONS: tuple[tuple[str, str], ...] = (
+        (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b.{0,50}\bnginx\b", "host.nginx_global"),
+        (r"\bnginx\b.{0,50}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b", "host.nginx_global"),
+        (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b.{0,50}\bsystemd\b", "host.systemd_global"),
+        (r"\bsystemd\b.{0,50}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b", "host.systemd_global"),
+        (r"\b(?:modify|change|edit|configure|disable|enable)\b.{0,50}\b(?:firewall|ufw)\b", "host.firewall"),
+        (r"\b(?:firewall|ufw)\b.{0,50}\b(?:modify|change|edit|configure|disable|enable)\b", "host.firewall"),
+        (r"\b(?:modify|change|edit)\b.{0,50}\bsudoers\b", "host.privilege"),
+        (r"\bprivilege escalation\b", "host.privilege"),
+        (r"\b(?:read|show|print|expose|change|rotate|replace)\b.{0,50}\b(?:root password|api key|secret|credential)\b", "host.secrets"),
+        (r"\b(?:modify|change|edit|replace)\b.{0,50}\bwp-config\.php\b", "wordpress.core_config"),
+        (r"\b(?:modify|change|edit|patch|replace|update)\b.{0,50}\bwordpress core\b", "wordpress.core"),
+        (r"\b(?:modify|change|edit|patch|replace)\b.{0,50}\b(?:wp-admin|wp-includes)\b", "wordpress.core"),
+        (r"\b(?:modify|change|edit|patch|replace|update)\b.{0,50}\bparent theme\b", "wordpress.parent_theme"),
+        (r"\bdrop\s+database\b", "database.destructive"),
+        (r"\bdrop\s+table\b", "database.destructive"),
+        (r"\btruncate\s+table\b", "database.destructive"),
+        (r"\bdelete\s+all\b.{0,40}\b(?:records|rows|data|users|orders|posts)\b", "database.destructive"),
+        (r"\b(?:modify|change|weaken|disable|bypass)\b.{0,60}\bmitigate governance\b", "mitigate.trust_boundary"),
+        (r"\b(?:modify|change|weaken|disable|bypass)\b.{0,60}\bsecurity policy\b", "mitigate.trust_boundary"),
+    )
+
+    _NEGATION_PREFIXES = (
+        "do not ",
+        "don't ",
+        "must not ",
+        "should not ",
+        "without ",
+        "never ",
+        "avoid ",
+        "no ",
     )
 
     _WORDPRESS_MARKERS = (
@@ -85,6 +99,25 @@ class ProjectOperationPolicy:
         "careers",
         "martfury",
     )
+
+    @staticmethod
+    def _is_negated(text: str, start: int) -> bool:
+        prefix = text[max(0, start - 24):start]
+        return any(prefix.endswith(marker) for marker in ProjectOperationPolicy._NEGATION_PREFIXES)
+
+    @classmethod
+    def _protected_operations(cls, objective: str) -> tuple[tuple[str, str], ...]:
+        lower = objective.lower()
+        found: list[tuple[str, str]] = []
+        for pattern, capability in cls._PROTECTED_ACTIONS:
+            for match in re.finditer(pattern, lower, re.DOTALL):
+                if cls._is_negated(lower, match.start()):
+                    continue
+                item = (pattern, capability)
+                if item not in found:
+                    found.append(item)
+                break
+        return tuple(found)
 
     @classmethod
     def _project_kind(
@@ -101,12 +134,12 @@ class ProjectOperationPolicy:
         if project_type in {"wordpress", "woocommerce", "wp"}:
             return "wordpress"
         lower = objective.lower()
+        if "mitigate core" in lower or "mitigate runtime" in lower:
+            return "mitigate-platform"
         if any(marker in lower for marker in cls._WORDPRESS_MARKERS):
             return "wordpress"
         if task_type in {"wordpress", "content", "seo"}:
             return "wordpress"
-        if "mitigate core" in lower or "mitigate runtime" in lower:
-            return "mitigate-platform"
         return "generic"
 
     @classmethod
@@ -127,14 +160,13 @@ class ProjectOperationPolicy:
             context=context,
             scope_project_kind=scope_project_kind,
         )
-        lower = objective.lower()
 
         protected: list[str] = []
         rationale: list[str] = [f"project_kind:{project_kind}"]
-        for marker, capability in cls._PROTECTED_MARKERS:
-            if marker in lower and capability not in protected:
+        for pattern, capability in cls._protected_operations(objective):
+            if capability not in protected:
                 protected.append(capability)
-                rationale.append(f"protected_marker:{marker}")
+                rationale.append(f"protected_action:{capability}")
 
         if project_kind == "wordpress":
             routine = list(cls.WORDPRESS_ROUTINE)
@@ -147,20 +179,6 @@ class ProjectOperationPolicy:
         else:
             routine = list(cls.GENERIC_ROUTINE)
             rationale.append("generic_project_routine_operations")
-
-        # Protected capabilities are never simultaneously advertised as routine.
-        protected_prefixes = {
-            "host.",
-            "database.destructive",
-            "wordpress.core",
-            "wordpress.core_config",
-            "wordpress.parent_theme",
-            "mitigate.trust_boundary",
-        }
-        routine = [
-            item for item in routine
-            if not any(item == prefix or item.startswith(prefix) for prefix in protected_prefixes)
-        ]
 
         return ProjectOperationDecision(
             project_kind=project_kind,
