@@ -16,6 +16,8 @@ from agent.runtime.production_request_composition import (
     build_production_request_composition,
 )
 from agent.runtime.mission_queue import MissionQueue
+from agent.runtime.autonomous_mission_queue import AutonomousMissionQueue
+from agent.runtime.manual_review_approval import ManualReviewApprovalService
 from agent.runtime.production_execution_reporter import (
     ProductionExecutionReporter,
 )
@@ -475,6 +477,80 @@ class ProductionRuntimeFacade:
             "items": items,
             "limit": limit,
             "count": len(items),
+        }
+
+    def process_execution_outcome(
+        self,
+        payload: Any,
+    ) -> dict[str, Any]:
+        if not self._running:
+            return {
+                "processed": False,
+                "failure_code": "runtime_not_running",
+                "blocked_reason": "runtime_not_running",
+            }
+
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_execution_outcome")
+
+        action = str(
+            payload.get("action") or ""
+        ).strip().lower()
+
+        if action not in {
+            "approve_manual_review",
+            "reject_manual_review",
+        }:
+            raise ValueError("invalid_execution_outcome")
+
+        mission_id = str(
+            payload.get("mission_id") or ""
+        ).strip()
+
+        actor = str(
+            payload.get("approved_by")
+            or payload.get("rejected_by")
+            or payload.get("decided_by")
+            or ""
+        ).strip()
+
+        if not mission_id:
+            raise ValueError("invalid_execution_outcome")
+
+        if self._queue is None:
+            raise RuntimeError("queue_resolution_failed")
+
+        queue_path = getattr(
+            self._queue,
+            "_path",
+            None,
+        )
+
+        if not queue_path:
+            raise RuntimeError("queue_resolution_failed")
+
+        approval_queue = AutonomousMissionQueue(
+            str(queue_path)
+        )
+
+        service = ManualReviewApprovalService(
+            queue=approval_queue,
+        )
+
+        if action == "approve_manual_review":
+            result = service.approve(
+                mission_id,
+                approved_by=actor,
+            )
+        else:
+            result = service.reject(
+                mission_id,
+                rejected_by=actor,
+            )
+
+        return {
+            "processed": True,
+            **result,
         }
 
     def runtime_status(

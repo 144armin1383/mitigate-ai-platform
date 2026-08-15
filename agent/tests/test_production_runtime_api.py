@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent.runtime.production_runtime_api import (
     ProductionRuntimeFacade,
@@ -91,6 +92,76 @@ class ProductionRuntimeAPITests(
                 }
             ],
         )
+
+    def test_process_execution_outcome_routes_manual_approval(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            queue_path = (
+                Path(td)
+                / "missions.json"
+            )
+
+            class FakeApprovalQueue:
+                def __init__(self, path):
+                    self._path = str(path)
+
+            runtime = ProductionRuntimeFacade(
+                FakeRequestFlow(),
+                queue=FakeApprovalQueue(
+                    queue_path
+                ),
+            )
+
+            runtime.start()
+
+            with patch(
+                "agent.runtime.production_runtime_api."
+                "ManualReviewApprovalService"
+            ) as service_class:
+                service = (
+                    service_class.return_value
+                )
+
+                service.approve.return_value = {
+                    "approved": True,
+                    "mission_id": "m-canvas-test",
+                    "state": "completed",
+                }
+
+                result = (
+                    runtime.process_execution_outcome(
+                        {
+                            "action": (
+                                "approve_manual_review"
+                            ),
+                            "mission_id": (
+                                "m-canvas-test"
+                            ),
+                            "approved_by": "admin",
+                        }
+                    )
+                )
+
+                self.assertTrue(
+                    result["processed"]
+                )
+
+                self.assertTrue(
+                    result["approved"]
+                )
+
+                self.assertEqual(
+                    result["mission_id"],
+                    "m-canvas-test",
+                )
+
+                service.approve.assert_called_once_with(
+                    "m-canvas-test",
+                    approved_by="admin",
+                )
+
+                service_class.assert_called_once()
 
     def test_runtime_builds_production_composition(
         self,
