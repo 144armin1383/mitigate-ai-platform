@@ -67,6 +67,18 @@ Scope derivation follows these rules:
 - derived scope and rationale are recorded in runtime evidence for diagnosis and audit;
 - if execution changes a path outside the derived scope, execution stops fail-closed and reports the scope violation rather than silently widening authorization.
 
+### Routine project operation policy
+
+Repository path scope and project runtime operations are separate policy dimensions. MITIGATE classifies common project-owned operations before execution so an ordinary request does not repeatedly stop for authorization of expected project actions.
+
+For a managed WordPress project, routine capabilities may include repository writes, WordPress page/content operations, plugin-owned schema and options, plugin activation, bounded WP-CLI project actions, project-owned private storage, normal deployment, and project health verification. These capabilities are expressed as MITIGATE-owned names, not arbitrary shell commands.
+
+This classification does not give OpenHands, OpenClaw, or another external execution engine direct host access. External engines continue to work only inside disposable repository workspaces. After governed publication, a MITIGATE Project Adapter is responsible for translating an authorized capability into bounded project-specific operations.
+
+Protected trust-boundary operations remain explicit and fail closed. Examples include global Nginx/systemd changes, firewall/security changes, privilege escalation, secret or credential access, WordPress core or parent-theme mutation, destructive database operations, and MITIGATE governance/security-policy changes.
+
+A protected noun appearing only in a constraint such as “do not modify Nginx” is not itself treated as a request for that protected operation. The policy classifies requested actions, not mere mentions. Routine and protected-operation decisions and their rationale are recorded in execution evidence for auditability.
+
 ## Memory contract
 
 Durable knowledge must answer what the project is, its architecture, what changed, why it changed, previous failures and successful fixes, decisions, constraints, deployment process, known risks, and outstanding work.

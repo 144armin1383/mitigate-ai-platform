@@ -19,6 +19,7 @@ from agent.execution.runtime_branch_publisher import RuntimeBranchPublisher
 from agent.execution.runtime_router import RuntimeRouter
 from agent.execution.workspace_manager import DisposableWorkspaceManager
 from agent.runtime.production_mission_controller import ProductionMissionController
+from agent.runtime.project_operation_policy import ProjectOperationPolicy
 from agent.runtime.project_scope_resolver import ProjectScopeResolver
 
 
@@ -66,16 +67,9 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             workspace_parent=data_root / "runtime" / "workspaces",
         )
         if adapter is not None:
-            # Preserve deterministic single-adapter injection for tests and
-            # explicitly constructed controllers.
             self.adapter = adapter
             runtime_adapters = [adapter]
         else:
-            # Production task specialization requires both execution runtimes
-            # to be registered. Previously only OpenHands was registered, so
-            # an explicit/runtime-policy OpenClaw route had no candidate and
-            # incorrectly ended as no_healthy_runtime_available even while the
-            # OpenClaw health probe itself was green.
             self.adapter = OpenHandsRuntimeAdapter()
             runtime_root = Path(
                 os.environ.get(
@@ -213,6 +207,26 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             context=context,
             deliverables=deliverables,
         )
+        operations = ProjectOperationPolicy.derive(
+            task_type=task_type,
+            objective=objective,
+            context=context,
+            scope_project_kind=scope.project_kind,
+        )
+
+        # Routine project work should not stop for repeated scope prompts. A
+        # request that explicitly asks to cross a protected trust boundary still
+        # fails closed before an external executor starts.
+        if operations.requires_explicit_authorization:
+            return {
+                "status": "blocked",
+                "reason": "protected_project_operation_requires_authorization",
+                "task_type": task_type,
+                "protected_operations": list(operations.protected_operations),
+                "routine_operations": list(operations.routine_operations),
+                "operation_rationale": list(operations.rationale),
+            }
+
         allowed_paths = scope.allowed_paths
         denied_paths = scope.denied_paths
 
@@ -235,6 +249,8 @@ class WorkspaceProductionMissionController(ProductionMissionController):
                 "Implement the smallest architecture-consistent fix.",
                 "Run relevant automated tests and validation.",
                 "Stay within the MITIGATE-derived repository scope.",
+                "Treat routine project operations as already classified by MITIGATE; do not ask for path-by-path scope approval.",
+                "Do not perform live host/deployment actions from the external runtime; MITIGATE Project Adapters own those actions after governed publication.",
                 "Do not commit, push or merge from the external runtime.",
                 *provider_guidance,
             ),
@@ -246,6 +262,8 @@ class WorkspaceProductionMissionController(ProductionMissionController):
                 "scope_project_kind": scope.project_kind,
                 "scope_rationale": list(scope.rationale),
                 "scope_allowed_paths": list(scope.allowed_paths),
+                "routine_project_operations": list(operations.routine_operations),
+                "operation_rationale": list(operations.rationale),
                 "model": os.environ.get("MITIGATE_OPENHANDS_MODEL", "gpt-5.5"),
                 "routing_rationale": routing.rationale,
                 "forced_provider": routing.forced_provider,
@@ -268,6 +286,12 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             "allowed_paths": list(scope.allowed_paths),
             "denied_paths": list(scope.denied_paths),
             "rationale": list(scope.rationale),
+        }
+        runtime_evidence["operations"] = {
+            "project_kind": operations.project_kind,
+            "routine": list(operations.routine_operations),
+            "protected": list(operations.protected_operations),
+            "rationale": list(operations.rationale),
         }
 
         if result.status == RuntimeStatus.succeeded:
@@ -299,6 +323,7 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             review["runtime_commit"] = result.evidence.commit_sha
             review["request_id"] = request_id
             review["task_type"] = task_type
+            review["routine_project_operations"] = list(operations.routine_operations)
             review["runtime_evidence"] = runtime_evidence
             return review
 
@@ -319,6 +344,7 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             "task_type": task_type,
             "runtime_status": result.status.value,
             "runtime_retryable": bool(result.retryable),
+            "routine_project_operations": list(operations.routine_operations),
             "runtime_evidence": runtime_evidence,
         }
 
