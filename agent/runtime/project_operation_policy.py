@@ -55,8 +55,8 @@ class ProjectOperationPolicy:
     _PROTECTED_ACTIONS: tuple[tuple[str, str], ...] = (
         (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b.{0,40}\bnginx\b", "host.nginx_global"),
         (r"\bnginx\b.{0,40}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b", "host.nginx_global"),
-        (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b.{0,40}\bsystemd\b", "host.systemd_global"),
-        (r"\bsystemd\b.{0,40}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b", "host.systemd_global"),
+        (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable|reconfigure)\b.{0,40}\bsystemd\b", "host.systemd_global"),
+        (r"\bsystemd\b.{0,40}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable|reconfigure)\b", "host.systemd_global"),
         (r"\b(?:modify|change|edit|configure|disable|enable)\b.{0,40}\b(?:firewall|ufw)\b", "host.firewall"),
         (r"\b(?:firewall|ufw)\b.{0,40}\b(?:modify|change|edit|configure|disable|enable)\b", "host.firewall"),
         (r"\b(?:modify|change|edit)\b.{0,40}\bsudoers\b", "host.privilege"),
@@ -99,12 +99,13 @@ class ProjectOperationPolicy:
 
     @staticmethod
     def _clauses(text: str) -> tuple[str, ...]:
-        # Keep requested actions local to one clause. This prevents a phrase
-        # such as "do not modify Nginx, do not change systemd" from matching
-        # an action in one clause with a protected noun in the next.
+        # Punctuation is a reliable boundary for the natural-language request
+        # forms used by the planner. Keep conjunctions inside a clause so
+        # compound requests such as "restart and reconfigure systemd" remain
+        # detectable, while comma-separated prohibitions stay isolated.
         return tuple(
             part.strip()
-            for part in re.split(r"[.;,\n]+|\b(?:and|but)\b", text.lower())
+            for part in re.split(r"[.;,\n]+", text.lower())
             if part.strip()
         )
 
