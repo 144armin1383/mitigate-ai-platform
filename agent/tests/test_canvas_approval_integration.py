@@ -47,6 +47,22 @@ class CanvasApprovalIntegrationTests(unittest.TestCase):
         self.assertNotIn("18.175.175.110", text)
         self.assertNotIn("mitigateuk.com", text)
 
+    def test_opencode_overlay_uses_fixed_zen_endpoint_and_canvas_profiles(self) -> None:
+        text = (ROOT / "agent/web/canvas_llm_provider_overlay.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("https://opencode.ai/zen/v1", text)
+        self.assertIn("openai/glm-5.2", text)
+        self.assertIn("/mitigate-llm/opencode/models", text)
+        self.assertIn("/api/profiles/${encodeURIComponent(PROFILE)}", text)
+        self.assertIn("base_url: BASE_URL", text)
+        self.assertIn("include_secrets: true", text)
+        self.assertIn("Save & Activate", text)
+        self.assertIn("Test Connection", text)
+        self.assertNotIn("localStorage", text)
+        self.assertNotIn("sessionStorage", text)
+        self.assertNotIn("18.175.175.110", text)
+
     def test_nginx_fragment_keeps_api_private_and_host_agnostic(self) -> None:
         text = (
             ROOT / "agent/deploy/nginx/mitigate-ai-canvas-approval.conf"
@@ -57,14 +73,20 @@ class CanvasApprovalIntegrationTests(unittest.TestCase):
         self.assertNotIn("18.175.175.110", text)
         self.assertNotIn("server_name", text)
 
-    def test_unified_installer_installs_both_controls(self) -> None:
+    def test_unified_installer_installs_all_canvas_controls(self) -> None:
         text = (
             ROOT / "agent/bootstrap/install_canvas_ui_integration.sh"
         ).read_text(encoding="utf-8")
         self.assertIn("mitigate-runtime-overlay.js", text)
         self.assertIn("mitigate-approval-overlay.js", text)
+        self.assertIn("mitigate-llm-provider-overlay.js", text)
         self.assertIn("MITIGATE_RUNTIME_OVERLAY=ACTIVE", text)
         self.assertIn("MITIGATE_APPROVAL_OVERLAY=ACTIVE", text)
+        self.assertIn("MITIGATE_LLM_PROVIDER_OVERLAY=ACTIVE", text)
+        self.assertIn("MITIGATE_OPENCODE_ZEN_PROBE=ACTIVE", text)
+        self.assertIn("https://opencode.ai/zen/v1/", text)
+        self.assertIn('proxy_set_header Authorization "Bearer \\$http_x_mitigate_llm_key"', text)
+        self.assertIn('proxy_set_header X-Mitigate-LLM-Key ""', text)
         self.assertIn("MITIGATE_STANDALONE_PANEL=REMOVED", text)
         self.assertIn("UPSTREAM_CANVAS_FILES_MODIFIED=no", text)
         self.assertNotIn("docker exec", text)
