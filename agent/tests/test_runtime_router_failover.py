@@ -143,7 +143,7 @@ class RuntimeRouterFailoverTests(unittest.TestCase):
             self.assertEqual("managed_openhands_runtime_incompatible", attempts[0]["reason"])
             self.assertEqual("succeeded", attempts[1]["status"])
 
-    def test_quota_failure_does_not_fail_over(self) -> None:
+    def test_quota_failure_fails_over_to_openclaw_in_fresh_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             repo = root / "repo"
@@ -156,6 +156,49 @@ class RuntimeRouterFailoverTests(unittest.TestCase):
                     provider="openhands",
                     retryable=False,
                     reason="openhands_llm_quota_exhausted",
+                ),
+            )
+            openclaw = _Adapter(
+                "openclaw",
+                ExecutionResult(
+                    status=RuntimeStatus.succeeded,
+                    provider="openclaw",
+                    evidence=ExecutionEvidence(changed_files=("agent/fix.py",)),
+                ),
+            )
+            router = RuntimeRouter(RuntimeRegistry([openhands, openclaw]), manager)
+
+            result = router.execute(
+                self._request(repo),
+                require=self._requirements(),
+                preferred=("openhands", "openclaw"),
+            )
+
+            self.assertEqual(RuntimeStatus.succeeded, result.status)
+            self.assertEqual("openclaw", result.provider)
+            self.assertEqual(1, len(openhands.workspaces))
+            self.assertEqual(1, len(openclaw.workspaces))
+            self.assertNotEqual(openhands.workspaces[0], openclaw.workspaces[0])
+            self.assertEqual(2, len(manager.created))
+            self.assertEqual(manager.created, manager.removed)
+            attempts = result.evidence.provider_metadata["provider_attempts"]
+            self.assertEqual(["openhands", "openclaw"], [item["provider"] for item in attempts])
+            self.assertEqual("openhands_llm_quota_exhausted", attempts[0]["reason"])
+            self.assertEqual("succeeded", attempts[1]["status"])
+
+    def test_credentials_failure_remains_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            repo.mkdir()
+            manager = _WorkspaceManager(root)
+            openhands = _Adapter(
+                "openhands",
+                ExecutionResult(
+                    status=RuntimeStatus.blocked,
+                    provider="openhands",
+                    retryable=False,
+                    reason="openhands_llm_credentials_unavailable",
                 ),
             )
             openclaw = _Adapter(
