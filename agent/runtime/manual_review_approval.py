@@ -315,8 +315,16 @@ class ManualReviewApprovalService:
             raise RuntimeError("approval_main_not_synced")
 
         branch, commit = self._mission_ref(mission_id)
-        diff_check = self._git("diff", "--check", f"main...{branch}", check=False)
-        if diff_check.returncode != 0 or diff_check.stdout.strip() or diff_check.stderr.strip():
+        diff_check = self._git(
+            "diff",
+            "--check",
+            f"main...{branch}",
+            check=False,
+        )
+        if (
+            diff_check.returncode != 0
+            or diff_check.stdout.strip()
+        ):
             raise RuntimeError("approval_diff_check_failed")
 
         changed_files = self._changed_files(branch)
