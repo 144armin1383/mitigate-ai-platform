@@ -10,10 +10,12 @@ CANVAS_UPSTREAM="${MITIGATE_CANVAS_UPSTREAM:-http://127.0.0.1:8000}"
 
 RUNTIME_SOURCE_JS="$ROOT/agent/integrations/agent-canvas/mitigate-runtime-overlay.js"
 APPROVAL_SOURCE_JS="$ROOT/agent/web/canvas_approval_overlay.js"
+LLM_SOURCE_JS="$ROOT/agent/web/canvas_llm_provider_overlay.js"
 APPROVAL_SOURCE_SNIPPET="$ROOT/agent/deploy/nginx/mitigate-ai-canvas-approval.conf"
 STATIC_DIR="/usr/local/share/mitigate-ai"
 RUNTIME_STATIC_JS="$STATIC_DIR/mitigate-runtime-overlay.js"
 APPROVAL_STATIC_JS="$STATIC_DIR/mitigate-approval-overlay.js"
+LLM_STATIC_JS="$STATIC_DIR/mitigate-llm-provider-overlay.js"
 APPROVAL_STATE_DIR="$DATA_ROOT/runtime/approvals"
 
 INTEGRATION_SNIPPET="/etc/nginx/snippets/mitigate-ai-canvas-integration.conf"
@@ -30,6 +32,7 @@ die() {
 [[ "$EUID" -eq 0 ]] || die "Run with sudo/root."
 [[ -f "$RUNTIME_SOURCE_JS" ]] || die "Runtime overlay source missing."
 [[ -f "$APPROVAL_SOURCE_JS" ]] || die "Approval overlay source missing."
+[[ -f "$LLM_SOURCE_JS" ]] || die "LLM provider overlay source missing."
 [[ -f "$APPROVAL_SOURCE_SNIPPET" ]] || die "Approval Nginx source missing."
 [[ -f "$NGINX_SITE" ]] || die "Nginx access site missing."
 [[ -f "$RUNTIME_ENV" ]] || die "Runtime environment missing."
@@ -50,7 +53,7 @@ RUNTIME_UID="$(stat -c '%u' "$DATA_ROOT/runtime")"
 RUNTIME_GID="$(stat -c '%g' "$DATA_ROOT/runtime")"
 install -d -o "$RUNTIME_UID" -g "$RUNTIME_GID" -m 0700 "$APPROVAL_STATE_DIR"
 
-for path in "$INTEGRATION_SNIPPET" "$APPROVAL_SNIPPET" "$RUNTIME_STATIC_JS" "$APPROVAL_STATIC_JS"; do
+for path in "$INTEGRATION_SNIPPET" "$APPROVAL_SNIPPET" "$RUNTIME_STATIC_JS" "$APPROVAL_STATIC_JS" "$LLM_STATIC_JS"; do
     if [[ -f "$path" ]]; then
         cp -a "$path" "$BACKUP_DIR/$(basename "$path").before"
     fi
@@ -58,6 +61,7 @@ done
 
 install -m 0644 "$RUNTIME_SOURCE_JS" "$RUNTIME_STATIC_JS"
 install -m 0644 "$APPROVAL_SOURCE_JS" "$APPROVAL_STATIC_JS"
+install -m 0644 "$LLM_SOURCE_JS" "$LLM_STATIC_JS"
 install -m 0644 "$APPROVAL_SOURCE_SNIPPET" "$APPROVAL_SNIPPET"
 
 AUTH_VALUE="$(printf '%s:%s' "$PANEL_USER" "$PANEL_PASS" | base64 -w0)"
@@ -75,6 +79,30 @@ location = /mitigate-overlay.js {
     alias ${RUNTIME_STATIC_JS};
     default_type application/javascript;
     add_header Cache-Control "no-store";
+}
+
+location = /mitigate-llm-provider-overlay.js {
+    alias ${LLM_STATIC_JS};
+    default_type application/javascript;
+    add_header Cache-Control "no-store";
+}
+
+# Fixed-destination OpenCode Zen connectivity probe. The browser sends the
+# candidate Zen key only in a custom header; Nginx converts it to the upstream
+# Bearer credential. No arbitrary destination or raw proxy URL is accepted.
+location ^~ /mitigate-llm/opencode/ {
+    proxy_pass https://opencode.ai/zen/v1/;
+    proxy_http_version 1.1;
+    proxy_ssl_server_name on;
+    proxy_ssl_name opencode.ai;
+    proxy_set_header Host opencode.ai;
+    proxy_set_header Authorization "Bearer \$http_x_mitigate_llm_key";
+    proxy_set_header X-Mitigate-LLM-Key "";
+    proxy_set_header Accept-Encoding "";
+    proxy_buffering off;
+    proxy_read_timeout 30s;
+    proxy_send_timeout 30s;
+    add_header Cache-Control "no-store" always;
 }
 
 location = /mitigate-runtime/providers {
@@ -108,7 +136,7 @@ location ^~ /canvas {
     proxy_buffering off;
 
     sub_filter_once on;
-    sub_filter '</body>' '<script defer src="/mitigate-overlay.js"></script><script defer src="/mitigate-approval-overlay.js"></script></body>';
+    sub_filter '</body>' '<script defer src="/mitigate-overlay.js"></script><script defer src="/mitigate-approval-overlay.js"></script><script defer src="/mitigate-llm-provider-overlay.js"></script></body>';
 }
 EOF_NGINX
 
@@ -137,6 +165,8 @@ systemctl reload nginx
 curl -fsS --max-time 5 http://127.0.0.1:8766/healthz >/dev/null || die "Canvas API health failed."
 grep -q 'mitigate-runtime-overlay.js' "$INTEGRATION_SNIPPET" || die "Runtime overlay injection missing."
 grep -q 'mitigate-approval-overlay.js' "$INTEGRATION_SNIPPET" || die "Approval overlay injection missing."
+grep -q 'mitigate-llm-provider-overlay.js' "$INTEGRATION_SNIPPET" || die "LLM provider overlay injection missing."
+grep -q 'opencode.ai/zen/v1' "$INTEGRATION_SNIPPET" || die "OpenCode Zen probe route missing."
 if grep -q 'location .*mitigate-panel' "$INTEGRATION_SNIPPET"; then
     die "Legacy standalone mitigate-panel route still present."
 fi
@@ -144,6 +174,8 @@ fi
 echo "CANVAS_UI_INTEGRATION_INSTALLED=yes"
 echo "MITIGATE_RUNTIME_OVERLAY=ACTIVE"
 echo "MITIGATE_APPROVAL_OVERLAY=ACTIVE"
+echo "MITIGATE_LLM_PROVIDER_OVERLAY=ACTIVE"
+echo "MITIGATE_OPENCODE_ZEN_PROBE=ACTIVE"
 echo "MITIGATE_APPROVAL_AUDIT_STORAGE=ACTIVE"
 echo "MITIGATE_STANDALONE_PANEL=REMOVED"
 echo "UPSTREAM_CANVAS_FILES_MODIFIED=no"
