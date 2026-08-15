@@ -18,9 +18,9 @@ class RuntimeRouter:
     """Route MITIGATE tasks to replaceable runtimes inside disposable workspaces.
 
     Provider failover is owned here, not by mission controllers. Every provider
-    attempt receives a newly allocated disposable workspace. Failover is only
-    allowed for provider/runtime integration failures; policy, quota,
-    credentials and scope failures remain terminal and are never bypassed.
+    attempt receives a newly allocated disposable workspace. Provider-specific
+    availability failures, including quota exhaustion, may fail over. Policy,
+    credentials, permissions, scope and approval failures remain terminal.
     """
 
     _FAILOVER_REASON_MARKERS = (
@@ -32,10 +32,10 @@ class RuntimeRouter:
         "agent_exec_failed",
         "connection",
         "network",
-    )
-    _NO_FAILOVER_REASON_MARKERS = (
         "quota_exhausted",
         "insufficient_quota",
+    )
+    _NO_FAILOVER_REASON_MARKERS = (
         "credentials_unavailable",
         "permission_denied",
         "refuses_canonical_workspace",
@@ -58,9 +58,17 @@ class RuntimeRouter:
     @classmethod
     def _can_failover(cls, result: ExecutionResult) -> bool:
         reason = str(result.reason or "").lower()
-        if result.status == RuntimeStatus.blocked:
-            return False
         if any(marker in reason for marker in cls._NO_FAILOVER_REASON_MARKERS):
+            return False
+        # A blocked result normally represents a protected boundary. The only
+        # blocked results eligible for provider substitution are explicit quota
+        # exhaustion markers, which describe provider capacity rather than a
+        # MITIGATE governance decision.
+        quota_failure = any(
+            marker in reason
+            for marker in ("quota_exhausted", "insufficient_quota")
+        )
+        if result.status == RuntimeStatus.blocked and not quota_failure:
             return False
         if result.status == RuntimeStatus.unavailable:
             return True
