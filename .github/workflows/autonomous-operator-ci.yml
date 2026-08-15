@@ -30,6 +30,7 @@ on:
       - 'agent/tests/test_manual_review_reconciliation.py'
       - 'agent/tests/test_canvas_approval_integration.py'
       - 'agent/tests/test_provider_task_policy.py'
+      - 'agent/tests/test_project_scope_resolver.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
     paths:
@@ -59,6 +60,7 @@ on:
       - 'agent/tests/test_manual_review_reconciliation.py'
       - 'agent/tests/test_canvas_approval_integration.py'
       - 'agent/tests/test_provider_task_policy.py'
+      - 'agent/tests/test_project_scope_resolver.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
 permissions:
@@ -93,6 +95,7 @@ jobs:
             agent/runtime/mission_diagnostics.py \
             agent/runtime/task_scope_workspace_controller.py \
             agent/runtime/managed_workspace_mission_controller.py \
+            agent/runtime/project_scope_resolver.py \
             agent/runtime/workspace_production_mission_controller.py \
             agent/runtime/production_runtime_api_isolated.py \
             agent/runtime/runtime_consolidation_controller.py \
@@ -117,7 +120,8 @@ jobs:
             agent/tests/test_manual_review_approval.py \
             agent/tests/test_manual_review_reconciliation.py \
             agent/tests/test_canvas_approval_integration.py \
-            agent/tests/test_provider_task_policy.py
+            agent/tests/test_provider_task_policy.py \
+            agent/tests/test_project_scope_resolver.py
       - name: Check shell integration
         run: |
           bash -n agent/bootstrap/configure_openhands_mcp.sh
@@ -148,4 +152,5 @@ jobs:
             agent.tests.test_manual_review_reconciliation \
             agent.tests.test_canvas_approval_integration \
             agent.tests.test_provider_task_policy \
+            agent.tests.test_project_scope_resolver \
             -v
