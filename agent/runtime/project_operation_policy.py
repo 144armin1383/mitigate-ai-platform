@@ -52,32 +52,29 @@ class ProjectOperationPolicy:
         "project.healthcheck",
     )
 
-    # A protected term appearing in a prohibition (for example "do not modify
-    # Nginx") must not itself block an otherwise routine mission. We therefore
-    # detect requested protected *actions*, not mere noun mentions.
     _PROTECTED_ACTIONS: tuple[tuple[str, str], ...] = (
-        (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b.{0,50}\bnginx\b", "host.nginx_global"),
-        (r"\bnginx\b.{0,50}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b", "host.nginx_global"),
-        (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b.{0,50}\bsystemd\b", "host.systemd_global"),
-        (r"\bsystemd\b.{0,50}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b", "host.systemd_global"),
-        (r"\b(?:modify|change|edit|configure|disable|enable)\b.{0,50}\b(?:firewall|ufw)\b", "host.firewall"),
-        (r"\b(?:firewall|ufw)\b.{0,50}\b(?:modify|change|edit|configure|disable|enable)\b", "host.firewall"),
-        (r"\b(?:modify|change|edit)\b.{0,50}\bsudoers\b", "host.privilege"),
+        (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b.{0,40}\bnginx\b", "host.nginx_global"),
+        (r"\bnginx\b.{0,40}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b", "host.nginx_global"),
+        (r"\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b.{0,40}\bsystemd\b", "host.systemd_global"),
+        (r"\bsystemd\b.{0,40}\b(?:modify|change|edit|configure|reload|restart|install|update|disable|enable)\b", "host.systemd_global"),
+        (r"\b(?:modify|change|edit|configure|disable|enable)\b.{0,40}\b(?:firewall|ufw)\b", "host.firewall"),
+        (r"\b(?:firewall|ufw)\b.{0,40}\b(?:modify|change|edit|configure|disable|enable)\b", "host.firewall"),
+        (r"\b(?:modify|change|edit)\b.{0,40}\bsudoers\b", "host.privilege"),
         (r"\bprivilege escalation\b", "host.privilege"),
-        (r"\b(?:read|show|print|expose|change|rotate|replace)\b.{0,50}\b(?:root password|api key|secret|credential)\b", "host.secrets"),
-        (r"\b(?:modify|change|edit|replace)\b.{0,50}\bwp-config\.php\b", "wordpress.core_config"),
-        (r"\b(?:modify|change|edit|patch|replace|update)\b.{0,50}\bwordpress core\b", "wordpress.core"),
-        (r"\b(?:modify|change|edit|patch|replace)\b.{0,50}\b(?:wp-admin|wp-includes)\b", "wordpress.core"),
-        (r"\b(?:modify|change|edit|patch|replace|update)\b.{0,50}\bparent theme\b", "wordpress.parent_theme"),
+        (r"\b(?:read|show|print|expose|change|rotate|replace)\b.{0,40}\b(?:root password|api key|secret|credential)\b", "host.secrets"),
+        (r"\b(?:modify|change|edit|replace)\b.{0,40}\bwp-config\.php\b", "wordpress.core_config"),
+        (r"\b(?:modify|change|edit|patch|replace|update)\b.{0,40}\bwordpress core\b", "wordpress.core"),
+        (r"\b(?:modify|change|edit|patch|replace)\b.{0,40}\b(?:wp-admin|wp-includes)\b", "wordpress.core"),
+        (r"\b(?:modify|change|edit|patch|replace|update)\b.{0,40}\bparent theme\b", "wordpress.parent_theme"),
         (r"\bdrop\s+database\b", "database.destructive"),
         (r"\bdrop\s+table\b", "database.destructive"),
         (r"\btruncate\s+table\b", "database.destructive"),
         (r"\bdelete\s+all\b.{0,40}\b(?:records|rows|data|users|orders|posts)\b", "database.destructive"),
-        (r"\b(?:modify|change|weaken|disable|bypass)\b.{0,60}\bmitigate governance\b", "mitigate.trust_boundary"),
-        (r"\b(?:modify|change|weaken|disable|bypass)\b.{0,60}\bsecurity policy\b", "mitigate.trust_boundary"),
+        (r"\b(?:modify|change|weaken|disable|bypass)\b.{0,50}\bmitigate governance\b", "mitigate.trust_boundary"),
+        (r"\b(?:modify|change|weaken|disable|bypass)\b.{0,50}\bsecurity policy\b", "mitigate.trust_boundary"),
     )
 
-    _NEGATION_PREFIXES = (
+    _NEGATION_MARKERS = (
         "do not ",
         "don't ",
         "must not ",
@@ -101,22 +98,28 @@ class ProjectOperationPolicy:
     )
 
     @staticmethod
-    def _is_negated(text: str, start: int) -> bool:
-        prefix = text[max(0, start - 24):start]
-        return any(prefix.endswith(marker) for marker in ProjectOperationPolicy._NEGATION_PREFIXES)
+    def _clauses(text: str) -> tuple[str, ...]:
+        # Keep requested actions local to one clause. This prevents a phrase
+        # such as "do not modify Nginx, do not change systemd" from matching
+        # an action in one clause with a protected noun in the next.
+        return tuple(
+            part.strip()
+            for part in re.split(r"[.;,\n]+|\b(?:and|but)\b", text.lower())
+            if part.strip()
+        )
 
     @classmethod
     def _protected_operations(cls, objective: str) -> tuple[tuple[str, str], ...]:
-        lower = objective.lower()
         found: list[tuple[str, str]] = []
-        for pattern, capability in cls._PROTECTED_ACTIONS:
-            for match in re.finditer(pattern, lower, re.DOTALL):
-                if cls._is_negated(lower, match.start()):
+        for clause in cls._clauses(objective):
+            if any(marker in clause for marker in cls._NEGATION_MARKERS):
+                continue
+            for pattern, capability in cls._PROTECTED_ACTIONS:
+                if not re.search(pattern, clause, re.DOTALL):
                     continue
                 item = (pattern, capability)
                 if item not in found:
                     found.append(item)
-                break
         return tuple(found)
 
     @classmethod
@@ -163,7 +166,7 @@ class ProjectOperationPolicy:
 
         protected: list[str] = []
         rationale: list[str] = [f"project_kind:{project_kind}"]
-        for pattern, capability in cls._protected_operations(objective):
+        for _pattern, capability in cls._protected_operations(objective):
             if capability not in protected:
                 protected.append(capability)
                 rationale.append(f"protected_action:{capability}")
@@ -172,8 +175,6 @@ class ProjectOperationPolicy:
             routine = list(cls.WORDPRESS_ROUTINE)
             rationale.append("managed_wordpress_routine_operations")
         elif project_kind == "mitigate-platform":
-            # Self-maintenance remains governed by the existing Core review
-            # pipeline; do not silently grant host/deployment capabilities.
             routine = ["project.repo_write", "project.validate"]
             rationale.append("mitigate_self_maintenance_no_host_grant")
         else:
