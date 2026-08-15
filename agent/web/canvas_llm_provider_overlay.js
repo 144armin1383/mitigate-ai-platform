@@ -88,6 +88,11 @@
     return value.startsWith('openai/') ? value.slice('openai/'.length) : value;
   }
 
+  function runtimeModelForZen(model) {
+    const id = normalizeModelForZen(model);
+    return id ? `opencode/${id}` : '';
+  }
+
   function setStatus(text, ok = null) {
     const el = document.querySelector(`#${ROOT_ID} [data-status]`);
     if (!el) return;
@@ -128,14 +133,20 @@
     const saveButton = document.querySelector(`#${ROOT_ID} [data-save]`);
     const key = String(keyInput?.value || '').trim();
     const model = String(modelInput?.value || '').trim() || DEFAULT_MODEL;
+    const runtimeModel = runtimeModelForZen(model);
     if (!key) {
       setStatus('Enter the OpenCode Zen API key first.', false);
       keyInput?.focus();
       return;
     }
+    if (!runtimeModel) {
+      setStatus('Enter a valid OpenCode Zen model.', false);
+      modelInput?.focus();
+      return;
+    }
 
     saveButton.disabled = true;
-    setStatus('Saving encrypted profile and activating it…');
+    setStatus('Saving encrypted profile and activating it for Canvas + MITIGATE Runtime…');
     try {
       await jsonRequest(`/api/profiles/${encodeURIComponent(PROFILE)}`, {
         method: 'POST',
@@ -162,11 +173,21 @@
       if (match && match.api_key_set === false) {
         throw new Error('Profile saved without an API key.');
       }
+
+      const runtime = await jsonRequest('/mitigate-runtime/provider/opencode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key, model: runtimeModel }),
+      });
+      if (runtime?.data?.runtime_configured !== true) {
+        throw new Error('Canvas profile saved, but MITIGATE Runtime provider activation was not confirmed.');
+      }
+
       keyInput.value = '';
       keyInput.placeholder = 'Configured — paste a new key only to replace it';
-      setStatus(`OpenCode Zen active — ${model}. Start a new chat to use it.`, true);
+      setStatus(`OpenCode Zen active for Canvas + MITIGATE Runtime — ${runtimeModel}.`, true);
       window.dispatchEvent(new CustomEvent('mitigate-llm-profile-updated', {
-        detail: { profile: PROFILE, model, baseUrl: BASE_URL },
+        detail: { profile: PROFILE, model, runtimeModel, baseUrl: BASE_URL },
       }));
     } catch (error) {
       setStatus(`Save failed: ${error?.message || error}`, false);
@@ -191,7 +212,7 @@
         <button type="button" data-minimize class="mitigate-opencode-minimize" aria-expanded="true" aria-label="Minimize OpenCode Zen settings" title="Minimize">−</button>
       </div>
       <div class="mitigate-opencode-body">
-        <div class="mitigate-opencode-help">Manage the OpenCode Zen profile here. The API key is saved by Agent Canvas secret storage and is never written to Git.</div>
+        <div class="mitigate-opencode-help">Manage OpenCode Zen for both Agent Canvas and MITIGATE Runtime. The API key is stored only in encrypted Canvas storage and MITIGATE's private runtime data directory; it is never written to Git.</div>
         <label>Base URL</label>
         <input value="${esc(BASE_URL)}" readonly aria-readonly="true" />
         <label>Model</label>
@@ -202,7 +223,7 @@
           <button type="button" data-test>Test Connection</button>
           <button type="button" data-save>Save & Activate</button>
         </div>
-        <div data-status class="mitigate-opencode-status">Use a new API key here; existing secrets are never read back into the browser.</div>
+        <div data-status class="mitigate-opencode-status">Save & Activate configures both Canvas chat and governed OpenClaw execution.</div>
       </div>
     `;
 
