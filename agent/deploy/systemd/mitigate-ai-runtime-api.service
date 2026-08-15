@@ -14,6 +14,7 @@ WorkingDirectory=/srv/mitigate/mitigate-ai-platform
 EnvironmentFile=/etc/mitigate-ai/runtime.env
 Environment="OPENCLAW_HOME=/srv/mitigate/data/openclaw"
 Environment="OPENCLAW_STATE_DIR=/srv/mitigate/data/openclaw"
+Environment="GIT_SSH_COMMAND=ssh -F /etc/mitigate-ai/ssh/config"
 
 ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.production_runtime_api
 
