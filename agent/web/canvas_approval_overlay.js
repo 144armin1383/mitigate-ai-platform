@@ -8,7 +8,6 @@
   const POLL_MS = 5000;
   const READ_TIMEOUT_MS = 8000;
   const ACTION_TIMEOUT_MS = 60000;
-  const CONFIRM_WINDOW_MS = 10000;
   const confirmations = new Map();
   let lastItems = [];
   let actionInProgress = false;
@@ -113,15 +112,13 @@
       return;
     }
     bodyEl.innerHTML = errorHtml + items.map(item => {
-      const approveArmed = isArmed(item.missionId, 'approve');
-      const rejectArmed = isArmed(item.missionId, 'reject');
       return `
       <article class="mitigate-approval-card" data-mission="${esc(item.missionId)}">
         <div class="mitigate-row"><div><div class="mitigate-id">${esc(item.requestId)}</div><div class="mitigate-id" style="margin-top:4px">${esc(item.missionId)}</div></div><span class="mitigate-badge">Awaiting Approval</span></div>
         <div class="mitigate-reason">${esc(item.reason)}</div>
         <div class="mitigate-decision-row">
-          <button class="mitigate-approve-btn${approveArmed ? ' confirming' : ''}" type="button" data-approve="${esc(item.missionId)}">${approveArmed ? 'Confirm Approve' : 'Approve &amp; Merge'}</button>
-          <button class="mitigate-reject-btn${rejectArmed ? ' confirming' : ''}" type="button" data-reject="${esc(item.missionId)}">${rejectArmed ? 'Confirm Reject' : 'Reject'}</button>
+          <button class="mitigate-approve-btn" type="button" data-approve="${esc(item.missionId)}">Approve &amp; Merge</button>
+          <button class="mitigate-reject-btn" type="button" data-reject="${esc(item.missionId)}">Reject</button>
         </div>
         <div class="mitigate-result" aria-live="polite"></div>
       </article>`;
@@ -146,28 +143,17 @@
     }
   }
 
-  function armDecision(missionId, decision) {
-    const key = decisionKey(missionId, decision);
-    confirmations.set(key, Date.now() + CONFIRM_WINDOW_MS);
-    render(lastItems);
-    window.setTimeout(() => {
-      if ((confirmations.get(key) || 0) <= Date.now()) {
-        confirmations.delete(key);
-        if (!actionInProgress) render(lastItems);
-      }
-    }, CONFIRM_WINDOW_MS + 100);
-  }
-
   async function decide(button, decision) {
     const missionId = button.getAttribute(decision === 'approve' ? 'data-approve' : 'data-reject');
     if (!missionId || actionInProgress) return;
-    if (!isArmed(missionId, decision)) {
-      armDecision(missionId, decision);
-      return;
-    }
 
-    confirmations.delete(decisionKey(missionId, decision));
-    confirmations.delete(decisionKey(missionId, decision === 'approve' ? 'reject' : 'approve'));
+    const confirmed = window.confirm(
+      decision === 'approve'
+        ? `Approve and merge mission ${missionId}?`
+        : `Reject mission ${missionId}?`
+    );
+
+    if (!confirmed) return;
     const card = button.closest('.mitigate-approval-card');
     const resultEl = card?.querySelector('.mitigate-result');
     const buttons = card ? Array.from(card.querySelectorAll('button')) : [button];
