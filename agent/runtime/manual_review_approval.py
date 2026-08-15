@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from agent.projects.project_deployment_coordinator import ProjectDeploymentCoordinator
+
 
 _SAFE_MISSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$")
 _MANUAL_REVIEW_REASON = "manual_review_required"
@@ -17,18 +19,10 @@ _MANUAL_REVIEW_REASON = "manual_review_required"
 class ManualReviewApprovalService:
     """Human-triggered, fail-closed manual-review decision service.
 
-    The caller supplies an already-authenticated human identity. The browser
-    never supplies Git refs or shell commands. Approval resolves the governed
-    mission branch and integrates it into ``main``. A direct fast-forward is
-    preferred; when ``main`` advanced after the mission branch was created, a
-    controlled non-fast-forward merge is allowed only if Git can complete it
-    without conflicts. Rejection performs no Git mutation and removes the
-    mission from active work by transitioning the durable queue record to
-    ``cancelled``.
-
-    Every decision is persisted both as a per-mission JSON record and in an
-    append-only JSONL history so future agents can reconstruct recent human
-    decisions when diagnosing regressions or unexpected behavior.
+    Approval integrates the governed Git revision first. If runtime evidence
+    classifies the change as routine managed-WordPress deployment, the accepted
+    revision is then handed to the MITIGATE-owned Project Adapter. External
+    execution providers never receive host deployment authority.
     """
 
     def __init__(
@@ -37,6 +31,7 @@ class ManualReviewApprovalService:
         queue: Any,
         repository_root: str | Path | None = None,
         data_root: str | Path | None = None,
+        deployment_coordinator: Any | None = None,
     ) -> None:
         self.queue = queue
         self.repository_root = Path(
@@ -49,6 +44,9 @@ class ManualReviewApprovalService:
             or os.environ.get("MITIGATE_AI_DATA_ROOT")
             or "/srv/mitigate/data"
         ).expanduser().resolve()
+        self.deployment_coordinator = deployment_coordinator or ProjectDeploymentCoordinator(
+            repository_root=self.repository_root
+        )
 
     def _git(
         self,
@@ -69,12 +67,7 @@ class ManualReviewApprovalService:
         return result
 
     def _failure_evidence(self, mission_id: str) -> dict[str, Any]:
-        path = (
-            self.data_root
-            / "runtime"
-            / "failure-evidence"
-            / f"{mission_id}.json"
-        )
+        path = self.data_root / "runtime" / "failure-evidence" / f"{mission_id}.json"
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, TypeError, ValueError) as exc:
@@ -84,9 +77,7 @@ class ManualReviewApprovalService:
         return payload
 
     def _failure_reason(self, mission_id: str) -> str:
-        return str(
-            self._failure_evidence(mission_id).get("reason") or ""
-        ).strip().lower()
+        return str(self._failure_evidence(mission_id).get("reason") or "").strip().lower()
 
     def _mission_ref(self, mission_id: str) -> tuple[str, str]:
         patterns = (
@@ -96,9 +87,7 @@ class ManualReviewApprovalService:
         refs: list[tuple[str, str]] = []
         for pattern in patterns:
             result = self._git(
-                "for-each-ref",
-                "--format=%(refname:short) %(objectname)",
-                pattern,
+                "for-each-ref", "--format=%(refname:short) %(objectname)", pattern,
             )
             for line in result.stdout.splitlines():
                 value = line.strip()
@@ -106,29 +95,19 @@ class ManualReviewApprovalService:
                     continue
                 ref, sha = value.rsplit(" ", 1)
                 refs.append((ref.strip(), sha.strip()))
-
         by_sha: dict[str, list[str]] = {}
         for ref, sha in refs:
             by_sha.setdefault(sha, []).append(ref)
-
         if len(by_sha) != 1:
             raise RuntimeError("approval_mission_branch_ambiguous")
-
         sha, names = next(iter(by_sha.items()))
-        preferred = next(
-            (name for name in names if not name.startswith("origin/")),
-            names[0],
-        )
+        preferred = next((name for name in names if not name.startswith("origin/")), names[0])
         return preferred, sha
 
     def _changed_files(self, branch: str) -> list[str]:
         return [
             line.strip()
-            for line in self._git(
-                "diff",
-                "--name-only",
-                f"main...{branch}",
-            ).stdout.splitlines()
+            for line in self._git("diff", "--name-only", f"main...{branch}").stdout.splitlines()
             if line.strip()
         ]
 
@@ -152,12 +131,11 @@ class ManualReviewApprovalService:
         already_merged: bool,
         result_state: str,
         integration_mode: str | None = None,
+        deployment: dict[str, Any] | None = None,
     ) -> Path:
         directory = self._decision_directory()
         path = directory / f"{mission_id}.json"
-        timestamp = dt.datetime.now(dt.timezone.utc).replace(
-            microsecond=0
-        ).isoformat().replace("+00:00", "Z")
+        timestamp = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         payload = {
             "schema_version": 1,
             "record_type": "manual_review_decision",
@@ -176,12 +154,10 @@ class ManualReviewApprovalService:
         }
         if integration_mode:
             payload["integration_mode"] = integration_mode
+        if deployment is not None:
+            payload["deployment"] = deployment
 
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=f".{mission_id}.",
-            suffix=".tmp",
-            dir=directory,
-        )
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{mission_id}.", suffix=".tmp", dir=directory)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, sort_keys=True, indent=2)
@@ -198,17 +174,12 @@ class ManualReviewApprovalService:
 
         history = directory / "decision-history.jsonl"
         line = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
-        history_fd = os.open(
-            history,
-            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
-            0o600,
-        )
+        history_fd = os.open(history, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
             os.write(history_fd, line.encode("utf-8"))
             os.fsync(history_fd)
         finally:
             os.close(history_fd)
-
         return path
 
     def _validate_manual_review(
@@ -222,17 +193,12 @@ class ManualReviewApprovalService:
             raise ValueError("invalid_mission_id")
         if not actor or len(actor) > 160:
             raise ValueError("invalid_approver")
-
         mission = self.queue.get(mission_id)
         evidence = self._failure_evidence(mission_id)
         state = str(mission.get("state") or "").lower()
         if state not in {"blocked", "completed", "cancelled"}:
             raise RuntimeError("approval_requires_manual_review")
-        if (
-            state == "blocked"
-            and str(evidence.get("reason") or "").strip().lower()
-            != _MANUAL_REVIEW_REASON
-        ):
+        if state == "blocked" and str(evidence.get("reason") or "").strip().lower() != _MANUAL_REVIEW_REASON:
             raise RuntimeError("approval_requires_manual_review")
         return mission, evidence
 
@@ -243,66 +209,80 @@ class ManualReviewApprovalService:
         commit: str,
         before: str,
     ) -> tuple[str, str]:
-        """Integrate a reviewed mission commit and return (mode, main_after)."""
-        if (
-            self._git(
-                "merge-base",
-                "--is-ancestor",
-                "main",
-                commit,
-                check=False,
-            ).returncode
-            == 0
-        ):
+        if self._git("merge-base", "--is-ancestor", "main", commit, check=False).returncode == 0:
             self._git("merge", "--ff-only", commit, timeout=60)
             return "fast_forward", self._git("rev-parse", "HEAD").stdout.strip()
-
         merge = self._git(
-            "merge",
-            "--no-ff",
-            "--no-edit",
-            "-m",
-            f"Approve governed mission {mission_id}",
-            commit,
-            check=False,
-            timeout=90,
+            "merge", "--no-ff", "--no-edit", "-m",
+            f"Approve governed mission {mission_id}", commit,
+            check=False, timeout=90,
         )
         if merge.returncode != 0:
             self._git("merge", "--abort", check=False, timeout=30)
             self._git("reset", "--hard", before, timeout=30)
             raise RuntimeError("approval_merge_conflict")
-
         after = self._git("rev-parse", "HEAD").stdout.strip()
-        if (
-            self._git(
-                "merge-base",
-                "--is-ancestor",
-                commit,
-                after,
-                check=False,
-            ).returncode
-            != 0
-        ):
+        if self._git("merge-base", "--is-ancestor", commit, after, check=False).returncode != 0:
             self._git("reset", "--hard", before, timeout=30)
             raise RuntimeError("approval_merge_verification_failed")
         return "merge_commit", after
 
+    def _deploy_approved_wordpress(
+        self,
+        *,
+        evidence: dict[str, Any],
+        changed_files: list[str],
+        revision: str,
+    ) -> dict[str, Any] | None:
+        runtime_evidence = evidence.get("runtime_evidence", {})
+        if not isinstance(runtime_evidence, dict):
+            return None
+        operations = runtime_evidence.get("operations", {})
+        if not isinstance(operations, dict):
+            return None
+        if str(operations.get("project_kind") or "").lower() != "wordpress":
+            return None
+        routine_raw = operations.get("routine", [])
+        routine = tuple(str(item) for item in routine_raw) if isinstance(routine_raw, list) else ()
+        if "project.deploy" not in routine or not any(path.startswith("wordpress/") for path in changed_files):
+            return None
+        try:
+            result = self.deployment_coordinator.deploy(
+                project_id=str(evidence.get("project_id") or "mitigate-ai-platform"),
+                project_type="wordpress",
+                revision=revision,
+                changed_files=tuple(changed_files),
+                routine_operations=routine,
+                deployment_target="",
+                metadata={"source": "manual_review_approval"},
+            )
+            return {
+                "success": bool(result.success),
+                "adapter": result.adapter,
+                "revision": result.deployed_revision,
+                "actions": list(result.actions),
+                "health_ok": result.health_ok,
+                "health_url": result.health_url,
+                "diagnostics": list(result.diagnostics),
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "adapter": "wordpress",
+                "revision": revision,
+                "actions": [],
+                "health_ok": None,
+                "health_url": None,
+                "diagnostics": [f"deployment_coordinator_exception:{type(exc).__name__}"],
+            }
+
     def approve(self, mission_id: str, *, approved_by: str) -> dict[str, Any]:
-        mission, evidence = self._validate_manual_review(
-            mission_id,
-            approved_by,
-        )
+        mission, evidence = self._validate_manual_review(mission_id, approved_by)
         state = str(mission.get("state") or "").lower()
         if state == "completed":
-            return {
-                "approved": True,
-                "mission_id": mission_id,
-                "state": "completed",
-                "idempotent": True,
-            }
+            return {"approved": True, "mission_id": mission_id, "state": "completed", "idempotent": True}
         if state == "cancelled":
             raise RuntimeError("approval_mission_was_rejected")
-
         if self._git("branch", "--show-current").stdout.strip() != "main":
             raise RuntimeError("approval_canonical_not_on_main")
         if self._git("status", "--porcelain").stdout.strip():
@@ -315,18 +295,9 @@ class ManualReviewApprovalService:
             raise RuntimeError("approval_main_not_synced")
 
         branch, commit = self._mission_ref(mission_id)
-        diff_check = self._git(
-            "diff",
-            "--check",
-            f"main...{branch}",
-            check=False,
-        )
-        if (
-            diff_check.returncode != 0
-            or diff_check.stdout.strip()
-        ):
+        diff_check = self._git("diff", "--check", f"main...{branch}", check=False)
+        if diff_check.returncode != 0 or diff_check.stdout.strip():
             raise RuntimeError("approval_diff_check_failed")
-
         changed_files = self._changed_files(branch)
         forbidden = (".git", ".env", "secrets")
         for path in changed_files:
@@ -339,50 +310,33 @@ class ManualReviewApprovalService:
             ):
                 raise RuntimeError("approval_forbidden_path")
 
-        already_merged = (
-            self._git(
-                "merge-base",
-                "--is-ancestor",
-                commit,
-                "main",
-                check=False,
-            ).returncode
-            == 0
-        )
-
+        already_merged = self._git("merge-base", "--is-ancestor", commit, "main", check=False).returncode == 0
         integration_mode = "already_merged"
         if not already_merged:
             integration_mode, local_after = self._integrate_mission_commit(
-                mission_id=mission_id,
-                commit=commit,
-                before=before,
+                mission_id=mission_id, commit=commit, before=before,
             )
             try:
                 self._git("push", "origin", "main", timeout=90)
             except Exception:
                 self._git("reset", "--hard", before, timeout=30)
                 raise
-
             self._git("fetch", "origin", "main", timeout=60)
             remote_after = self._git("rev-parse", "origin/main").stdout.strip()
             verified_local = self._git("rev-parse", "HEAD").stdout.strip()
             if verified_local != local_after or remote_after != local_after:
                 self._git("reset", "--hard", before, timeout=30)
                 raise RuntimeError("approval_remote_verification_failed")
-            if (
-                self._git(
-                    "merge-base",
-                    "--is-ancestor",
-                    commit,
-                    verified_local,
-                    check=False,
-                ).returncode
-                != 0
-            ):
+            if self._git("merge-base", "--is-ancestor", commit, verified_local, check=False).returncode != 0:
                 self._git("reset", "--hard", before, timeout=30)
                 raise RuntimeError("approval_remote_verification_failed")
 
         after = self._git("rev-parse", "HEAD").stdout.strip()
+        deployment = self._deploy_approved_wordpress(
+            evidence=evidence,
+            changed_files=changed_files,
+            revision=after,
+        )
         record = self._write_decision_record(
             mission_id=mission_id,
             decided_by=approved_by,
@@ -396,10 +350,10 @@ class ManualReviewApprovalService:
             already_merged=already_merged,
             result_state="completed",
             integration_mode=integration_mode,
+            deployment=deployment,
         )
         self.queue.approve_manual_review(mission_id)
-
-        return {
+        response = {
             "approved": True,
             "mission_id": mission_id,
             "state": "completed",
@@ -411,23 +365,17 @@ class ManualReviewApprovalService:
             "already_merged": already_merged,
             "approval_record": str(record),
         }
+        if deployment is not None:
+            response["deployment"] = deployment
+        return response
 
     def reject(self, mission_id: str, *, rejected_by: str) -> dict[str, Any]:
-        mission, evidence = self._validate_manual_review(
-            mission_id,
-            rejected_by,
-        )
+        mission, evidence = self._validate_manual_review(mission_id, rejected_by)
         state = str(mission.get("state") or "").lower()
         if state == "cancelled":
-            return {
-                "rejected": True,
-                "mission_id": mission_id,
-                "state": "cancelled",
-                "idempotent": True,
-            }
+            return {"rejected": True, "mission_id": mission_id, "state": "cancelled", "idempotent": True}
         if state == "completed":
             raise RuntimeError("rejection_mission_already_completed")
-
         if self._git("branch", "--show-current").stdout.strip() != "main":
             raise RuntimeError("approval_canonical_not_on_main")
         if self._git("status", "--porcelain").stdout.strip():
@@ -460,7 +408,6 @@ class ManualReviewApprovalService:
             integration_mode="none",
         )
         self.queue.reject_manual_review(mission_id)
-
         return {
             "rejected": True,
             "mission_id": mission_id,
