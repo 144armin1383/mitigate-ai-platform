@@ -177,101 +177,58 @@ class ManualReviewApprovalTests(unittest.TestCase):
 
 
 
-    def test_diff_check_allows_harmless_stderr_warning(
-        self,
-    ):
-        service = self._service()
-
-        service._validate_manual_review = lambda *args, **kwargs: (
-            {
-                "id": "m-warning-test",
-                "state": "blocked",
-            },
-            {
-                "reason": "manual_review_required",
-                "request_id": "r-warning-test",
-            },
-        )
-
-        def fake_git(*args, **kwargs):
-            from subprocess import CompletedProcess
-
-            if args == ("branch", "--show-current"):
-                return CompletedProcess(args, 0, "main\n", "")
-
-            if args == ("status", "--porcelain"):
-                return CompletedProcess(args, 0, "", "")
-
-            if args == ("fetch", "origin", "main"):
-                return CompletedProcess(args, 0, "", "")
-
-            if args == ("rev-parse", "HEAD"):
-                return CompletedProcess(args, 0, "abc\n", "")
-
-            if args == ("rev-parse", "origin/main"):
-                return CompletedProcess(args, 0, "abc\n", "")
-
-            if (
-                len(args) >= 1
-                and args[0] == "for-each-ref"
-            ):
-                return CompletedProcess(
-                    args,
-                    0,
-                    (
-                        "agent/mission-m-warning-test-20260815 "
-                        "def\n"
-                    ),
-                    "",
-                )
-
-            if args[:2] == ("diff", "--check"):
-                return CompletedProcess(
-                    args,
-                    0,
-                    "",
-                    (
-                        "warning: unable to access "
-                        "'/home/ubuntu/.config/git/attributes': "
-                        "Permission denied\n"
-                    ),
-                )
-
-            if args[:2] == (
-                "merge-base",
-                "--is-ancestor",
-            ):
-                return CompletedProcess(
-                    args,
-                    0,
-                    "",
-                    "",
-                )
-
-            return CompletedProcess(
-                args,
-                0,
-                "",
-                "",
+    def test_diff_check_allows_harmless_stderr_warning(self) -> None:
+        td, repo, _remote, data = self._fixture()
+        with td:
+            queue, mission_id, mission_commit = self._blocked_mission(
+                repo=repo,
+                data=data,
             )
 
-        service._git = fake_git
-        service._changed_files = lambda branch: [
-            "docs/test.md"
-        ]
-        service._write_record = lambda record: (
-            "/tmp/fake-approval.json"
-        )
-        service.queue.approve_manual_review = (
-            lambda mission_id: None
-        )
+            service = ManualReviewApprovalService(
+                queue=queue,
+                repository_root=repo,
+                data_root=data,
+            )
 
-        result = service.approve(
-            "m-warning-test",
-            approved_by="test",
-        )
+            original_git = service._git
 
-        self.assertTrue(result["approved"])
+            def warning_git(*args, **kwargs):
+                result = original_git(*args, **kwargs)
+
+                if args[:2] == ("diff", "--check"):
+                    return subprocess.CompletedProcess(
+                        result.args,
+                        result.returncode,
+                        result.stdout,
+                        (
+                            "warning: unable to access "
+                            "'/home/ubuntu/.config/git/attributes': "
+                            "Permission denied\\n"
+                        ),
+                    )
+
+                return result
+
+            service._git = warning_git
+
+            result = service.approve(
+                mission_id,
+                approved_by="warning-regression-test",
+            )
+
+            self.assertTrue(result["approved"])
+            self.assertEqual("completed", result["state"])
+            self.assertEqual(mission_commit, result["commit"])
+            self.assertEqual(
+                ["docs/assessment.md"],
+                result["changed_files"],
+            )
+            self.assertEqual(
+                "completed",
+                queue.get(mission_id)["state"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
