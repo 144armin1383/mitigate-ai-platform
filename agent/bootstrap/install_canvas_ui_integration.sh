@@ -17,6 +17,7 @@ RUNTIME_STATIC_JS="$STATIC_DIR/mitigate-runtime-overlay.js"
 APPROVAL_STATIC_JS="$STATIC_DIR/mitigate-approval-overlay.js"
 LLM_STATIC_JS="$STATIC_DIR/mitigate-llm-provider-overlay.js"
 APPROVAL_STATE_DIR="$DATA_ROOT/runtime/approvals"
+PROVIDER_SECRET_DIR="$DATA_ROOT/runtime/provider-secrets"
 
 INTEGRATION_SNIPPET="/etc/nginx/snippets/mitigate-ai-canvas-integration.conf"
 APPROVAL_SNIPPET="/etc/nginx/snippets/mitigate-ai-canvas-approval.conf"
@@ -46,12 +47,9 @@ PANEL_PASS="$(awk -F= '$1=="MITIGATE_AI_PANEL_PASSWORD" {sub(/^[^=]*=/, ""); gsu
 
 install -d -m 0755 "$STATIC_DIR" "$BACKUP_DIR"
 
-# Decision history is written by the same non-root account that owns the
-# durable runtime state. Derive numeric ownership instead of hard-coding ubuntu
-# so fresh-server deployments remain portable.
 RUNTIME_UID="$(stat -c '%u' "$DATA_ROOT/runtime")"
 RUNTIME_GID="$(stat -c '%g' "$DATA_ROOT/runtime")"
-install -d -o "$RUNTIME_UID" -g "$RUNTIME_GID" -m 0700 "$APPROVAL_STATE_DIR"
+install -d -o "$RUNTIME_UID" -g "$RUNTIME_GID" -m 0700 "$APPROVAL_STATE_DIR" "$PROVIDER_SECRET_DIR"
 
 for path in "$INTEGRATION_SNIPPET" "$APPROVAL_SNIPPET" "$RUNTIME_STATIC_JS" "$APPROVAL_STATIC_JS" "$LLM_STATIC_JS"; do
     if [[ -f "$path" ]]; then
@@ -117,6 +115,22 @@ location = /mitigate-runtime/providers {
     proxy_buffering off;
 }
 
+# Authenticated same-origin handoff from the Canvas provider card to MITIGATE's
+# private runtime provider store. The key never enters Git, Nginx config, query
+# strings or browser storage.
+location = /mitigate-runtime/provider/opencode {
+    include ${AUTH_SNIPPET};
+
+    proxy_pass http://127.0.0.1:8766/api/providers/opencode;
+    proxy_http_version 1.1;
+    proxy_set_header Host 127.0.0.1;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_buffering off;
+    client_max_body_size 16k;
+}
+
 include ${APPROVAL_SNIPPET};
 
 location ^~ /canvas {
@@ -167,6 +181,7 @@ grep -q 'mitigate-runtime-overlay.js' "$INTEGRATION_SNIPPET" || die "Runtime ove
 grep -q 'mitigate-approval-overlay.js' "$INTEGRATION_SNIPPET" || die "Approval overlay injection missing."
 grep -q 'mitigate-llm-provider-overlay.js' "$INTEGRATION_SNIPPET" || die "LLM provider overlay injection missing."
 grep -q 'opencode.ai/zen/v1' "$INTEGRATION_SNIPPET" || die "OpenCode Zen probe route missing."
+grep -q '/mitigate-runtime/provider/opencode' "$INTEGRATION_SNIPPET" || die "OpenCode runtime sync route missing."
 if grep -q 'location .*mitigate-panel' "$INTEGRATION_SNIPPET"; then
     die "Legacy standalone mitigate-panel route still present."
 fi
@@ -176,6 +191,7 @@ echo "MITIGATE_RUNTIME_OVERLAY=ACTIVE"
 echo "MITIGATE_APPROVAL_OVERLAY=ACTIVE"
 echo "MITIGATE_LLM_PROVIDER_OVERLAY=ACTIVE"
 echo "MITIGATE_OPENCODE_ZEN_PROBE=ACTIVE"
+echo "MITIGATE_OPENCODE_RUNTIME_SYNC=ACTIVE"
 echo "MITIGATE_APPROVAL_AUDIT_STORAGE=ACTIVE"
 echo "MITIGATE_STANDALONE_PANEL=REMOVED"
 echo "UPSTREAM_CANVAS_FILES_MODIFIED=no"

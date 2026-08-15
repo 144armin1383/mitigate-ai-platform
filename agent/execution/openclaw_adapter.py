@@ -14,6 +14,7 @@ from agent.execution.runtime_adapter import (
     RuntimeCapabilities,
     RuntimeStatus,
 )
+from agent.runtime.provider_secret_store import load_provider_secret
 
 
 class OpenClawRuntimeAdapter:
@@ -76,11 +77,14 @@ class OpenClawRuntimeAdapter:
             check=False,
             timeout=15,
         )
+        managed = load_provider_secret("opencode")
         return {
             "available": probe.returncode == 0,
             "mode": "cli",
             "binary": binary,
             "version": (probe.stdout or probe.stderr).strip()[:200],
+            "managed_llm_provider": "opencode" if managed else None,
+            "managed_llm_model": str(managed.get("model") or "") if managed else None,
         }
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
@@ -146,6 +150,15 @@ class OpenClawRuntimeAdapter:
             timeout=min(request.timeout_seconds, 60),
         )
 
+    @staticmethod
+    def _managed_opencode_exec_config() -> tuple[str | None, dict[str, str]]:
+        secret = load_provider_secret("opencode")
+        model = str(secret.get("model") or "").strip()
+        api_key = str(secret.get("api_key") or "").strip()
+        if not model or not api_key or not model.startswith("opencode/"):
+            return None, {}
+        return model, {"OPENCODE_API_KEY": api_key, "OPENCODE_ZEN_API_KEY": api_key}
+
     def _run_agent_exec(self, request: ExecutionRequest) -> ExecutionResult:
         binary = self._binary_path()
         if not binary:
@@ -162,34 +175,39 @@ class OpenClawRuntimeAdapter:
             return self._failure(RuntimeStatus.blocked, "openclaw_refuses_canonical_workspace", False)
 
         prompt = self._coding_prompt(request)
+        managed_model, managed_env = self._managed_opencode_exec_config()
+        command = [
+            binary,
+            "agent",
+            "exec",
+            "--message-file",
+            "-",
+            "--cwd",
+            str(workspace),
+        ]
+        if managed_model:
+            command.extend(["--model", managed_model, "--auth-env-only"])
+        command.append("--json")
+
         proc = subprocess.run(
-            [
-                binary,
-                "agent",
-                "exec",
-                "--message-file",
-                "-",
-                "--cwd",
-                str(workspace),
-                "--json",
-            ],
+            command,
             input=prompt,
             cwd=workspace,
             text=True,
             capture_output=True,
             check=False,
             timeout=max(30, int(request.timeout_seconds)),
-            env={**os.environ, "OPENHANDS_SUPPRESS_BANNER": "1"},
+            env={**os.environ, **managed_env, "OPENHANDS_SUPPRESS_BANNER": "1"},
         )
 
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
         if proc.returncode != 0:
             detail = (stderr or stdout).lower()
-            if "insufficient_quota" in detail or "credit_balance_exhausted" in detail:
+            if "insufficient_quota" in detail or "credit_balance_exhausted" in detail or "quota_exhausted" in detail:
                 reason = "openclaw_llm_quota_exhausted"
                 retryable = False
-            elif "api key" in detail and any(marker in detail for marker in ("missing", "unavailable", "required")):
+            elif "api key" in detail and any(marker in detail for marker in ("missing", "unavailable", "required", "invalid")):
                 reason = "openclaw_llm_credentials_unavailable"
                 retryable = False
             elif "permission denied" in detail:
@@ -209,6 +227,8 @@ class OpenClawRuntimeAdapter:
                         "mode": "agent-exec",
                         "working_directory": str(workspace),
                         "returncode": proc.returncode,
+                        "managed_llm_provider": "opencode" if managed_model else None,
+                        "managed_llm_model": managed_model,
                         "stdout_tail": stdout[-3000:],
                         "stderr_tail": stderr[-3000:],
                     },
@@ -230,6 +250,8 @@ class OpenClawRuntimeAdapter:
                     "mode": "agent-exec",
                     "working_directory": str(workspace),
                     "returncode": proc.returncode,
+                    "managed_llm_provider": "opencode" if managed_model else None,
+                    "managed_llm_model": managed_model,
                     "response": response,
                     "stdout_tail": stdout[-2000:],
                     "stderr_tail": stderr[-2000:],

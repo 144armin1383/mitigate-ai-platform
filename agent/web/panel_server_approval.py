@@ -8,11 +8,14 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from agent.runtime.provider_secret_store import save_provider_secret
 from agent.web import panel_server as base
 
 
 _SAFE_MISSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$")
 _MANUAL_REVIEW_REASON = "manual_review_required"
+_OPENCODE_RUNTIME_MODEL = re.compile(r"^opencode/[A-Za-z0-9][A-Za-z0-9._:+-]{0,159}$")
+_MAX_PROVIDER_BODY_BYTES = 8192
 
 
 def _data_root() -> Path:
@@ -46,9 +49,6 @@ def _mission_records(queue: dict[str, Any]) -> list[dict[str, Any]]:
             records.append(record)
         return records
 
-    # Compatibility with queue files whose top-level mapping is keyed directly
-    # by mission id. Ignore ordinary queue metadata scalars/dicts without a
-    # recognizable mission state.
     records = []
     for mission_id, value in queue.items():
         if not isinstance(value, dict):
@@ -62,13 +62,6 @@ def _mission_records(queue: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _approval_queue_items() -> list[dict[str, Any]]:
-    """Return only durable manual-review gates without scanning request history.
-
-    The Canvas approval control used to poll the general /v1/requests endpoint.
-    That endpoint reconstructs historical request state and can outlive the UI
-    polling timeout. Approval state is much smaller and is already durable in
-    missions.json plus per-mission failure evidence, so expose it directly.
-    """
     root = _data_root() / "runtime"
     queue = _load_json(root / "missions.json")
     missions = _mission_records(queue)
@@ -105,13 +98,31 @@ def _approval_queue_items() -> list[dict[str, Any]]:
 
 
 class ApprovalPanelServer(base.PanelServer):
-    """Loopback-only Canvas API with governed manual-review actions."""
+    """Loopback-only Canvas API with governed manual-review/provider actions."""
 
     def handler(self):
         parent = super().handler()
         outer = self
 
         class Handler(parent):
+            def _read_bounded_json(self) -> dict[str, Any] | None:
+                try:
+                    length = int(self.headers.get("Content-Length") or "0")
+                except ValueError:
+                    length = 0
+                if length <= 0 or length > _MAX_PROVIDER_BODY_BYTES:
+                    self._json(400, {"ok": False, "error": {"code": "invalid_request", "message": "Invalid request body"}})
+                    return None
+                try:
+                    value = json.loads(self.rfile.read(length).decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    self._json(400, {"ok": False, "error": {"code": "invalid_json", "message": "Invalid JSON"}})
+                    return None
+                if not isinstance(value, dict):
+                    self._json(400, {"ok": False, "error": {"code": "invalid_request", "message": "JSON object required"}})
+                    return None
+                return value
+
             def do_GET(self) -> None:
                 parsed = urllib.parse.urlsplit(self.path)
                 if parsed.path == "/api/approvals":
@@ -134,6 +145,28 @@ class ApprovalPanelServer(base.PanelServer):
 
             def do_POST(self) -> None:
                 parsed = urllib.parse.urlsplit(self.path)
+                if parsed.path == "/api/providers/opencode":
+                    if not self._require_auth():
+                        return
+                    body = self._read_bounded_json()
+                    if body is None:
+                        return
+                    api_key = str(body.get("api_key") or "").strip()
+                    model = str(body.get("model") or "").strip()
+                    if not api_key or len(api_key) > 4096:
+                        self._json(400, {"ok": False, "error": {"code": "invalid_api_key", "message": "OpenCode API key is required"}})
+                        return
+                    if not _OPENCODE_RUNTIME_MODEL.fullmatch(model):
+                        self._json(400, {"ok": False, "error": {"code": "invalid_model", "message": "OpenCode runtime model must use opencode/<model>"}})
+                        return
+                    try:
+                        save_provider_secret(provider="opencode", api_key=api_key, model=model)
+                    except (OSError, ValueError):
+                        self._json(500, {"ok": False, "error": {"code": "provider_secret_store_failed", "message": "Unable to store runtime provider credential"}})
+                        return
+                    self._json(200, {"ok": True, "status": 200, "data": {"provider": "opencode", "model": model, "runtime_configured": True}})
+                    return
+
                 parts = [
                     urllib.parse.unquote(part)
                     for part in parsed.path.split("/")
