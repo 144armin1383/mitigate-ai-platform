@@ -6,6 +6,7 @@
   const BASE_URL = 'https://opencode.ai/zen/v1';
   const DEFAULT_MODEL = 'openai/glm-5.2';
   const SETTINGS_PATH = '/canvas/settings/llm';
+  const MINIMIZED_STORAGE_KEY = 'mitigate.opencodeZen.minimized';
 
   const esc = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -16,6 +17,44 @@
 
   function onLlmSettingsPage() {
     return window.location.pathname.startsWith(SETTINGS_PATH);
+  }
+
+  function isMinimized() {
+    try {
+      return window.localStorage.getItem(MINIMIZED_STORAGE_KEY) === '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function persistMinimized(value) {
+    try {
+      window.localStorage.setItem(MINIMIZED_STORAGE_KEY, value ? '1' : '0');
+    } catch (_) {
+      // UI preference only. Failure to persist must never break LLM controls.
+    }
+  }
+
+  function applyMinimizedState(root, minimized) {
+    root.classList.toggle('is-minimized', minimized);
+    const toggle = root.querySelector('[data-minimize]');
+    if (toggle) {
+      toggle.textContent = minimized ? '+' : '−';
+      toggle.setAttribute('aria-expanded', minimized ? 'false' : 'true');
+      toggle.setAttribute(
+        'aria-label',
+        minimized ? 'Expand OpenCode Zen settings' : 'Minimize OpenCode Zen settings',
+      );
+      toggle.title = minimized ? 'Expand' : 'Minimize';
+    }
+  }
+
+  function toggleMinimized() {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+    const minimized = !root.classList.contains('is-minimized');
+    persistMinimized(minimized);
+    applyMinimizedState(root, minimized);
   }
 
   async function jsonRequest(url, options = {}) {
@@ -147,25 +186,33 @@
     root.id = ROOT_ID;
     root.setAttribute('aria-label', 'MITIGATE OpenCode Zen');
     root.innerHTML = `
-      <div class="mitigate-opencode-title">MITIGATE · OpenCode Zen</div>
-      <div class="mitigate-opencode-help">Manage the OpenCode Zen profile here. The API key is saved by Agent Canvas secret storage and is never written to Git.</div>
-      <label>Base URL</label>
-      <input value="${esc(BASE_URL)}" readonly aria-readonly="true" />
-      <label>Model</label>
-      <input data-model value="${esc(DEFAULT_MODEL)}" autocomplete="off" spellcheck="false" />
-      <label>API Key</label>
-      <input data-api-key type="password" autocomplete="new-password" placeholder="sk-…" />
-      <div class="mitigate-opencode-actions">
-        <button type="button" data-test>Test Connection</button>
-        <button type="button" data-save>Save & Activate</button>
+      <div class="mitigate-opencode-header">
+        <div class="mitigate-opencode-title">MITIGATE · OpenCode Zen</div>
+        <button type="button" data-minimize class="mitigate-opencode-minimize" aria-expanded="true" aria-label="Minimize OpenCode Zen settings" title="Minimize">−</button>
       </div>
-      <div data-status class="mitigate-opencode-status">Use a new API key here; existing secrets are never read back into the browser.</div>
+      <div class="mitigate-opencode-body">
+        <div class="mitigate-opencode-help">Manage the OpenCode Zen profile here. The API key is saved by Agent Canvas secret storage and is never written to Git.</div>
+        <label>Base URL</label>
+        <input value="${esc(BASE_URL)}" readonly aria-readonly="true" />
+        <label>Model</label>
+        <input data-model value="${esc(DEFAULT_MODEL)}" autocomplete="off" spellcheck="false" />
+        <label>API Key</label>
+        <input data-api-key type="password" autocomplete="new-password" placeholder="sk-…" />
+        <div class="mitigate-opencode-actions">
+          <button type="button" data-test>Test Connection</button>
+          <button type="button" data-save>Save & Activate</button>
+        </div>
+        <div data-status class="mitigate-opencode-status">Use a new API key here; existing secrets are never read back into the browser.</div>
+      </div>
     `;
 
     const style = document.createElement('style');
     style.textContent = `
-      #${ROOT_ID}{position:fixed;right:24px;bottom:24px;z-index:2147483000;width:min(420px,calc(100vw - 48px));padding:16px;border:1px solid #3a3a3a;border-radius:12px;background:#171717;color:#f2f2f2;box-shadow:0 16px 45px rgba(0,0,0,.38);font:13px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-      #${ROOT_ID} .mitigate-opencode-title{font-size:15px;font-weight:700;margin-bottom:5px}
+      #${ROOT_ID}{position:fixed;right:24px;bottom:24px;z-index:2147483000;width:min(420px,calc(100vw - 48px));padding:16px;border:1px solid #3a3a3a;border-radius:12px;background:#171717;color:#f2f2f2;box-shadow:0 16px 45px rgba(0,0,0,.38);font:13px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:width .16s ease,padding .16s ease}
+      #${ROOT_ID} .mitigate-opencode-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+      #${ROOT_ID} .mitigate-opencode-title{font-size:15px;font-weight:700}
+      #${ROOT_ID} .mitigate-opencode-minimize{flex:0 0 auto;width:30px;height:30px;padding:0;display:grid;place-items:center;font-size:18px;line-height:1}
+      #${ROOT_ID} .mitigate-opencode-body{margin-top:5px}
       #${ROOT_ID} .mitigate-opencode-help{color:#aaa;margin-bottom:12px}
       #${ROOT_ID} label{display:block;color:#d5d5d5;margin:9px 0 5px}
       #${ROOT_ID} input{box-sizing:border-box;width:100%;border:1px solid #444;border-radius:7px;background:#222;color:#fff;padding:9px 10px;outline:none}
@@ -176,9 +223,15 @@
       #${ROOT_ID} button[data-save]{background:#f0d85a;color:#111;border-color:#f0d85a;font-weight:700}
       #${ROOT_ID} button:disabled{opacity:.55;cursor:wait}
       #${ROOT_ID} .mitigate-opencode-status{margin-top:10px;color:#b7b7b7;min-height:18px}
+      #${ROOT_ID}.is-minimized{width:auto;min-width:250px;padding:9px 10px}
+      #${ROOT_ID}.is-minimized .mitigate-opencode-body{display:none}
+      #${ROOT_ID}.is-minimized .mitigate-opencode-title{font-size:14px;white-space:nowrap}
+      @media (max-width:560px){#${ROOT_ID}{right:12px;bottom:12px;width:calc(100vw - 24px)}#${ROOT_ID}.is-minimized{width:auto;max-width:calc(100vw - 24px);min-width:0}}
     `;
     root.appendChild(style);
     document.body.appendChild(root);
+    applyMinimizedState(root, isMinimized());
+    root.querySelector('[data-minimize]').addEventListener('click', toggleMinimized);
     root.querySelector('[data-test]').addEventListener('click', testConnection);
     root.querySelector('[data-save]').addEventListener('click', saveAndActivate);
   }

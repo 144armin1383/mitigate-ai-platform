@@ -59,8 +59,14 @@ class CanvasApprovalIntegrationTests(unittest.TestCase):
         self.assertIn("include_secrets: true", text)
         self.assertIn("Save & Activate", text)
         self.assertIn("Test Connection", text)
-        self.assertNotIn("localStorage", text)
+        self.assertIn("MINIMIZED_STORAGE_KEY", text)
+        self.assertIn("data-minimize", text)
+        self.assertIn("is-minimized", text)
+        self.assertIn("Expand OpenCode Zen settings", text)
+        self.assertIn("Minimize OpenCode Zen settings", text)
         self.assertNotIn("sessionStorage", text)
+        self.assertNotIn("localStorage.setItem('api", text)
+        self.assertNotIn("localStorage.setItem(\"api", text)
         self.assertNotIn("18.175.175.110", text)
 
     def test_nginx_fragment_keeps_api_private_and_host_agnostic(self) -> None:
