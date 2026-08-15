@@ -18,6 +18,7 @@ from agent.execution.runtime_adapter import (
 from agent.execution.runtime_branch_publisher import RuntimeBranchPublisher
 from agent.execution.runtime_router import RuntimeRouter
 from agent.execution.workspace_manager import DisposableWorkspaceManager
+from agent.projects.project_deployment_coordinator import ProjectDeploymentCoordinator
 from agent.runtime.production_mission_controller import ProductionMissionController
 from agent.runtime.project_operation_policy import ProjectOperationPolicy
 from agent.runtime.project_scope_resolver import ProjectScopeResolver
@@ -49,6 +50,7 @@ class WorkspaceProductionMissionController(ProductionMissionController):
         workspace_manager: Any | None = None,
         publisher: Any | None = None,
         review_callback: Any | None = None,
+        deployment_coordinator: Any | None = None,
     ) -> None:
         super().__init__(repository_root=repository_root, timeout_seconds=timeout_seconds)
         data_root = Path(
@@ -92,6 +94,9 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             publisher=self.publisher,
         )
         self.review_callback = review_callback
+        self.deployment_coordinator = deployment_coordinator or ProjectDeploymentCoordinator(
+            repository_root=self.repository_root
+        )
 
     def _definition_path(self, mission_name: str) -> Path:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", mission_name):
@@ -149,7 +154,6 @@ class WorkspaceProductionMissionController(ProductionMissionController):
 
     @staticmethod
     def _default_allowed_paths(task_type: str, objective: str) -> tuple[str, ...]:
-        """Backward-compatible helper retained for older callers/tests."""
         decision = ProjectScopeResolver.derive(
             task_type=task_type,
             objective=objective,
@@ -183,6 +187,46 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             return False
         return RuntimeRouter._can_failover(result)
 
+    def _deploy_review_result(
+        self,
+        *,
+        review: dict[str, Any],
+        context: Mapping[str, Any],
+        operations: Any,
+    ) -> dict[str, Any]:
+        if review.get("status") != "success":
+            return review
+        if operations.project_kind != "wordpress":
+            return review
+        if "project.deploy" not in operations.routine_operations:
+            return review
+        revision = str(review.get("git_commit") or "").strip()
+        changed = tuple(str(item) for item in review.get("changed_files", []) if str(item).strip())
+        if not revision or not any(path.startswith("wordpress/") for path in changed):
+            return review
+        deployment = self.deployment_coordinator.deploy(
+            project_id=str(context.get("project_id") or "mitigate-ai-platform"),
+            project_type="wordpress",
+            revision=revision,
+            changed_files=changed,
+            routine_operations=tuple(operations.routine_operations),
+            deployment_target=str(context.get("deployment_target") or ""),
+            metadata={"source": "automatic_review_merge"},
+        )
+        review["deployment"] = {
+            "success": bool(deployment.success),
+            "adapter": deployment.adapter,
+            "revision": deployment.deployed_revision,
+            "actions": list(deployment.actions),
+            "health_ok": deployment.health_ok,
+            "health_url": deployment.health_url,
+            "diagnostics": list(deployment.diagnostics),
+        }
+        if not deployment.success:
+            review["status"] = "blocked"
+            review["reason"] = "project_deployment_failed"
+        return review
+
     def execute(self, mission: dict[str, Any]) -> dict[str, Any]:
         try:
             mission_name = self._mission_name(mission)
@@ -214,9 +258,6 @@ class WorkspaceProductionMissionController(ProductionMissionController):
             scope_project_kind=scope.project_kind,
         )
 
-        # Routine project work should not stop for repeated scope prompts. A
-        # request that explicitly asks to cross a protected trust boundary still
-        # fails closed before an external executor starts.
         if operations.requires_explicit_authorization:
             return {
                 "status": "blocked",
@@ -227,33 +268,35 @@ class WorkspaceProductionMissionController(ProductionMissionController):
                 "operation_rationale": list(operations.rationale),
             }
 
-        allowed_paths = scope.allowed_paths
-        denied_paths = scope.denied_paths
-
         routing = decide_provider(task_type, objective)
         provider_guidance = provider_contract(routing.preferred[0])
-
         request_id = str(
             metadata.get("request_id") or context.get("request_id") or mission_name
         ).strip()
+        criteria = [
+            "Inspect the existing repository before modifying files.",
+            "Implement the smallest architecture-consistent fix.",
+            "Run relevant automated tests and validation.",
+            "Stay within the MITIGATE-derived repository scope.",
+            "Treat routine project operations as already classified by MITIGATE; do not ask for path-by-path scope approval.",
+            "Do not perform live host/deployment actions from the external runtime; MITIGATE Project Adapters own those actions after governed publication.",
+            "Do not commit, push or merge from the external runtime.",
+        ]
+        if scope.project_kind == "wordpress" and "project.deploy" in operations.routine_operations:
+            criteria.append(
+                "When live WordPress activation/page creation is required, declare only bounded actions in wordpress/mitigate-deploy.json (version 1); never add shell or SQL commands to the manifest."
+            )
+        criteria.extend(provider_guidance)
+
         request = ExecutionRequest(
             request_id=request_id,
             mission_id=mission_name,
             objective=objective,
             repository_root=str(self.repository_root),
             base_revision="main",
-            allowed_paths=allowed_paths,
-            denied_paths=denied_paths,
-            acceptance_criteria=(
-                "Inspect the existing repository before modifying files.",
-                "Implement the smallest architecture-consistent fix.",
-                "Run relevant automated tests and validation.",
-                "Stay within the MITIGATE-derived repository scope.",
-                "Treat routine project operations as already classified by MITIGATE; do not ask for path-by-path scope approval.",
-                "Do not perform live host/deployment actions from the external runtime; MITIGATE Project Adapters own those actions after governed publication.",
-                "Do not commit, push or merge from the external runtime.",
-                *provider_guidance,
-            ),
+            allowed_paths=scope.allowed_paths,
+            denied_paths=scope.denied_paths,
+            acceptance_criteria=tuple(criteria),
             timeout_seconds=self.timeout_seconds,
             metadata={
                 "task_type": task_type,
@@ -317,6 +360,11 @@ class WorkspaceProductionMissionController(ProductionMissionController):
                 self.review_callback(mission_name)
                 if self.review_callback is not None
                 else self._review_and_merge(mission_name)
+            )
+            review = self._deploy_review_result(
+                review=review,
+                context=context,
+                operations=operations,
             )
             review["provider"] = result.provider
             review["runtime_branch"] = result.evidence.branch

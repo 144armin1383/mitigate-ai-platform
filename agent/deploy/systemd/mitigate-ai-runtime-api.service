@@ -15,6 +15,7 @@ EnvironmentFile=/etc/mitigate-ai/runtime.env
 Environment="OPENCLAW_HOME=/srv/mitigate/data/openclaw"
 Environment="OPENCLAW_STATE_DIR=/srv/mitigate/data/openclaw"
 Environment="GIT_SSH_COMMAND=ssh -F /etc/mitigate-ai/ssh/config"
+Environment="MITIGATE_WORDPRESS_ROOT=/srv/mitigate/wordpress/current"
 
 ExecStart=/srv/mitigate/mitigate-ai-platform/agent/.venv/bin/python -m agent.runtime.production_runtime_api
 
@@ -44,7 +45,10 @@ SystemCallArchitectures=native
 
 UMask=0077
 
-ReadWritePaths=/srv/mitigate/mitigate-ai-platform /srv/mitigate/data /srv/mitigate/ai-logs /var/log/mitigate-ai
+# Manual approval may trigger a MITIGATE-owned Project Adapter deployment after
+# Git integration. Keep the writable host surface bounded to the managed
+# WordPress root rather than weakening ProtectSystem globally.
+ReadWritePaths=/srv/mitigate/mitigate-ai-platform /srv/mitigate/data /srv/mitigate/ai-logs /var/log/mitigate-ai /srv/mitigate/wordpress
 
 RuntimeDirectory=mitigate-ai-runtime-api
 RuntimeDirectoryMode=0750

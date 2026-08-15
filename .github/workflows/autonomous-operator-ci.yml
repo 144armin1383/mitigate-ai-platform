@@ -6,10 +6,13 @@ on:
     paths:
       - 'agent/execution/**'
       - 'agent/runtime/**'
+      - 'agent/projects/**'
       - 'agent/web/**'
       - 'agent/bootstrap/**'
       - 'agent/deploy/nginx/**'
       - 'agent/deploy/systemd/mitigate-ai-panel.service'
+      - 'agent/deploy/systemd/mitigate-ai-worker.service'
+      - 'agent/deploy/systemd/mitigate-ai-runtime-api.service'
       - 'agent/maintenance/activate_isolated_mission_runtime.sh'
       - 'agent/maintenance/activate_openclaw_worker_compat.sh'
       - 'agent/maintenance/reconcile_manual_review_approvals.py'
@@ -32,15 +35,19 @@ on:
       - 'agent/tests/test_provider_task_policy.py'
       - 'agent/tests/test_project_scope_resolver.py'
       - 'agent/tests/test_project_operation_policy.py'
+      - 'agent/tests/test_wordpress_project_adapter.py'
       - '.github/workflows/autonomous-operator-ci.yml'
   pull_request:
     paths:
       - 'agent/execution/**'
       - 'agent/runtime/**'
+      - 'agent/projects/**'
       - 'agent/web/**'
       - 'agent/bootstrap/**'
       - 'agent/deploy/nginx/**'
       - 'agent/deploy/systemd/mitigate-ai-panel.service'
+      - 'agent/deploy/systemd/mitigate-ai-worker.service'
+      - 'agent/deploy/systemd/mitigate-ai-runtime-api.service'
       - 'agent/maintenance/activate_isolated_mission_runtime.sh'
       - 'agent/maintenance/activate_openclaw_worker_compat.sh'
       - 'agent/maintenance/reconcile_manual_review_approvals.py'
@@ -63,6 +70,7 @@ on:
       - 'agent/tests/test_provider_task_policy.py'
       - 'agent/tests/test_project_scope_resolver.py'
       - 'agent/tests/test_project_operation_policy.py'
+      - 'agent/tests/test_wordpress_project_adapter.py'
       - '.github/workflows/autonomous-operator-ci.yml'
 
 permissions:
@@ -89,6 +97,9 @@ jobs:
             agent/execution/openclaw_adapter.py \
             agent/execution/provider_task_policy.py \
             agent/execution/runtime_router.py \
+            agent/projects/project_adapter.py \
+            agent/projects/project_deployment_coordinator.py \
+            agent/projects/wordpress_project_adapter.py \
             agent/runtime/autonomous_mission_queue.py \
             agent/runtime/autonomous_mission_diagnostics.py \
             agent/runtime/host_recovery_supervisor.py \
@@ -125,7 +136,8 @@ jobs:
             agent/tests/test_canvas_approval_integration.py \
             agent/tests/test_provider_task_policy.py \
             agent/tests/test_project_scope_resolver.py \
-            agent/tests/test_project_operation_policy.py
+            agent/tests/test_project_operation_policy.py \
+            agent/tests/test_wordpress_project_adapter.py
       - name: Check shell integration
         run: |
           bash -n agent/bootstrap/configure_openhands_mcp.sh
@@ -158,4 +170,5 @@ jobs:
             agent.tests.test_provider_task_policy \
             agent.tests.test_project_scope_resolver \
             agent.tests.test_project_operation_policy \
+            agent.tests.test_wordpress_project_adapter \
             -v
