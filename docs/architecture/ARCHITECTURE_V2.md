@@ -50,6 +50,23 @@ The core must not encode WordPress assumptions. Each adapter should expose capab
 - rollback;
 - expose project-specific operational actions.
 
+### Project-aware mission scope derivation
+
+Before an external execution runtime starts, MITIGATE derives the minimum repository write scope from the mission task type, project metadata, requested objective, and explicit deliverables. The derived scope is a Core-owned policy boundary; execution providers consume it but may not broaden it.
+
+For ordinary managed-project work, known project-owned repository areas should be authorized automatically so routine requests do not require repeated path-by-path approval. For example, a WordPress/WooCommerce feature may receive repository scope for the repository-managed `wordpress/` source tree and related documentation even when the planner classifies the overall request as `deployment`.
+
+Automatic scope derivation does **not** authorize live-host mutations. Secrets, MITIGATE policy, global Nginx/systemd configuration, firewall/security configuration, privilege changes, WordPress core, unrelated projects, and other trust-boundary changes remain protected by their existing deployment and approval controls.
+
+Scope derivation follows these rules:
+
+- explicit safe deliverables remain useful scope hints but do not override protected boundaries;
+- project metadata and objective intent can correct an overly broad task classification such as a WordPress feature being labelled `deployment`;
+- managed WordPress work is constrained to repository-managed WordPress source and documentation, not live `wp-content` or host paths;
+- MITIGATE self-maintenance can receive Core repository scope only when the mission objective explicitly targets MITIGATE platform/runtime architecture;
+- derived scope and rationale are recorded in runtime evidence for diagnosis and audit;
+- if execution changes a path outside the derived scope, execution stops fail-closed and reports the scope violation rather than silently widening authorization.
+
 ## Memory contract
 
 Durable knowledge must answer what the project is, its architecture, what changed, why it changed, previous failures and successful fixes, decisions, constraints, deployment process, known risks, and outstanding work.
